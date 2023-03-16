@@ -20,7 +20,7 @@ const WINDOW_HEIGHT: usize = 600;
 
 struct OclStuff {
     pro_que: ocl::ProQue,
-    image: ocl::Image<u8>,
+    image: ocl::Image<u32>,
     render_kernel: ocl::Kernel,
 }
 
@@ -54,12 +54,7 @@ fn main() {
                 // render and display image
                 ocl_stuff.render_kernel.set_arg("t", t).unwrap();
                 unsafe { ocl_stuff.render_kernel.enq().unwrap(); }
-                ocl_stuff.image.read(
-                    // Reinterpret the &[u32] host buffer as &[u8] to read the CL image into it.
-                    // This should be safe, because (on the common OSes+hardware) you can always expect to be
-                    // able to fit four `u8`s in place of a `u32` without realigning, right?
-                    unsafe { image_buffer.as_mut_slice().align_to_mut::<u8>().1 }
-                ).enq().unwrap();
+                ocl_stuff.image.read(image_buffer.as_mut_slice()).enq().unwrap();
                 graphics_context.set_buffer(image_buffer.as_ref(), WINDOW_WIDTH as u16, WINDOW_HEIGHT as u16);
             },
             _ => {},
@@ -69,7 +64,18 @@ fn main() {
 
 fn set_up_opencl() -> OclStuff {
     let src = r#"
-        // t is just a time paramter to get a changing image
+        // Important: expects input to be in [0,1]. Otherwise expect nonsensical results.
+        uint normalized_float3_to_u32(float3 color) {
+            color *= 255.f;
+            return ((uint)color.r << 16) | ((uint)color.g << 8) | (uint)color.b;
+        }
+
+        // Converts the float3 `color` to a u32 and writes the result to `image` at `coord`.
+        void convert_and_write_image(write_only image2d_t image, int2 coord, float3 color) {
+            write_imageui(image, coord, normalized_float3_to_u32(color));
+        };
+
+        // t is just a time paramter to get the image to not look static.
         kernel void render(float t, write_only image2d_t image) {
             uint x = get_global_id(0);
             uint y = get_global_id(1);
@@ -80,11 +86,12 @@ fn set_up_opencl() -> OclStuff {
             float some_norm = (float)(x*x + y*y)
                             / (float)(width*width + height*height);
 
-            float4 color = 0.f;
+            float3 color = 0.f;
             color.r = some_norm * fabs(sin(t));
             color.g = (1.f - color.r) * (1.f - some_norm) * fabs(cos(t));
             color.b = 1.f - (color.r + color.g);
-            write_imagef(image, (int2)(x, y), color);
+
+            convert_and_write_image(image, (int2)(x,y), color);
         }
     "#;
 
@@ -93,17 +100,19 @@ fn set_up_opencl() -> OclStuff {
                   .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
                   .build().unwrap();
 
-    let image = ocl::Image::<u8>::builder()
+    let image = ocl::Image::<u32>::builder()
                 .queue(pro_que.queue().clone())
                 .image_type(MemObjectType::Image2d)
-                // The `softbuffer` crate expects each pixel to be `0rgb`, where each component is 8 bits.
+                // `softbuffer` expects each pixel to be a u32 `0rgb`, where each component is 8 bits.
                 // Note that the first component is expected to be 0!
-                /* @todo looks like Argb is backwards and Bgra works as expected. I think the `align_to_mut`
-                cast causes the bytes to be backwards because intel is little-endian */
-                .channel_order(ImageChannelOrder::Argb)
-                // UnormInt8: each component is a u8 in 0-255, but the 'norm' part means that our kernel code
-                // should treat it as a float in 0-1. OpenCL handles the conversion automatically.
-                .channel_data_type(ImageChannelDataType::UnormInt8)
+                /* Using single-channel UnsignedInt32 for the OpenCL image because:
+                    The alternative is using 4-channel 8-bit, and reinterpreting the &[u8] as &[u32] after
+                    copying the data to host. The problem is that the correctness of the reinterpretation
+                    depends on the endianness of the CPU architecture, which is not something I want to keep
+                    track of.
+                */
+                .channel_order(ImageChannelOrder::R)
+                .channel_data_type(ImageChannelDataType::UnsignedInt32)
                 .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
                 .flags(
                     // note: CL_MEM_KERNEL_READ_AND_WRITE support is not guaranteed under OpenCL 3.0
