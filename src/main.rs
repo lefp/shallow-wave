@@ -1,5 +1,6 @@
 use std::f32::consts::TAU;
 
+use ocl::{enums::{MemObjectType, ImageChannelOrder, ImageChannelDataType}, MemFlags};
 use winit::{
     event_loop::{
         EventLoop,
@@ -19,7 +20,7 @@ const WINDOW_HEIGHT: usize = 600;
 
 struct OclStuff {
     pro_que: ocl::ProQue,
-    image_buffer: ocl::Buffer<u32>,
+    image: ocl::Image<u8>,
     render_kernel: ocl::Kernel,
 }
 
@@ -53,7 +54,12 @@ fn main() {
                 // render and display image
                 ocl_stuff.render_kernel.set_arg("t", t).unwrap();
                 unsafe { ocl_stuff.render_kernel.enq().unwrap(); }
-                ocl_stuff.image_buffer.read(&mut image_buffer).enq().unwrap();
+                ocl_stuff.image.read(
+                    // Reinterpret the &[u32] host buffer as &[u8] to read the CL image into it.
+                    // This should be safe, because (on the common OSes+hardware) you can always expect to be
+                    // able to fit four `u8`s in place of a `u32` without realigning, right?
+                    unsafe { image_buffer.as_mut_slice().align_to_mut::<u8>().1 }
+                ).enq().unwrap();
                 graphics_context.set_buffer(image_buffer.as_ref(), WINDOW_WIDTH as u16, WINDOW_HEIGHT as u16);
             },
             _ => {},
@@ -64,36 +70,53 @@ fn main() {
 fn set_up_opencl() -> OclStuff {
     let src = r#"
         // t is just a time paramter to get a changing image
-        kernel void render(float t, global uint* buffer, uint image_width, uint image_height) {
-            uint linear_index = get_global_id(0);
-            uint x = linear_index % image_width;
-            uint y = linear_index / image_width;
+        kernel void render(float t, write_only image2d_t image) {
+            uint x = get_global_id(0);
+            uint y = get_global_id(1);
+            uint width  = get_image_width (image);
+            uint height = get_image_height(image);
 
             // `some_norm` is in [0,1]
             float some_norm = (float)(x*x + y*y)
-                            / (float)(image_width*image_width + image_height*image_height);
+                            / (float)(width*width + height*height);
 
-            uint red   = (uint)(255.f * some_norm * fabs(sin(t)));
-            uint green = (uint)( (float)(255 - red) * ((1.f - some_norm) * fabs(cos(t))) );
-            uint blue = 255 - (red + green);
-            buffer[linear_index] = (red << 16) | (green << 8) | blue;
+            float4 color = 0.f;
+            color.r = some_norm * fabs(sin(t));
+            color.g = (1.f - color.r) * (1.f - some_norm) * fabs(cos(t));
+            color.b = 1.f - (color.r + color.g);
+            write_imagef(image, (int2)(x, y), color);
         }
     "#;
 
     let pro_que = ocl::ProQue::builder()
                   .src(src)
-                  .dims(WINDOW_WIDTH * WINDOW_HEIGHT)
+                  .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
                   .build().unwrap();
 
-    let image_buffer = pro_que.create_buffer::<u32>().unwrap();
+    let image = ocl::Image::<u8>::builder()
+                .queue(pro_que.queue().clone())
+                .image_type(MemObjectType::Image2d)
+                // The `softbuffer` crate expects each pixel to be `0rgb`, where each component is 8 bits.
+                // Note that the first component is expected to be 0!
+                /* @todo looks like Argb is backwards and Bgra works as expected. I think the `align_to_mut`
+                cast causes the bytes to be backwards because intel is little-endian */
+                .channel_order(ImageChannelOrder::Argb)
+                // UnormInt8: each component is a u8 in 0-255, but the 'norm' part means that our kernel code
+                // should treat it as a float in 0-1. OpenCL handles the conversion automatically.
+                .channel_data_type(ImageChannelDataType::UnormInt8)
+                .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
+                .flags(
+                    // note: CL_MEM_KERNEL_READ_AND_WRITE support is not guaranteed under OpenCL 3.0
+                    MemFlags::WRITE_ONLY | // kernel will only render to it
+                    MemFlags::HOST_READ_ONLY // host will read so that `softbuffer` can display the image
+                )
+                .build().expect("Failed to build OpenCL image.");
 
     let render_kernel = pro_que.kernel_builder("render")
                         .arg_named("t", 0f32)
-                        .arg(&image_buffer)
-                        .arg(WINDOW_WIDTH  as u32)
-                        .arg(WINDOW_HEIGHT as u32)
+                        .arg(&image)
                         .build().unwrap();
 
-    OclStuff { pro_que, image_buffer, render_kernel }
+    OclStuff { pro_que, image, render_kernel }
 }
 
