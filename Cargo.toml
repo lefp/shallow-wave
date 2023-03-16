@@ -1,0 +1,9 @@
+[package]
+name = "boids"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ocl = "0.19.4"
+softbuffer = "0.2.0"
+winit = "0.28.2"
