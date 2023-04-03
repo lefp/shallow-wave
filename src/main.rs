@@ -14,7 +14,10 @@ const GRID_CENTERPOINT: f32 = 0.5 * GRID_ENDPOINT;
 
 use std::{fs::File, io::Read};
 
-use ocl::{enums::{MemObjectType, ImageChannelOrder, ImageChannelDataType}, MemFlags};
+use ocl::{
+    enums::{MemObjectType, ImageChannelOrder, ImageChannelDataType},
+    MemFlags
+};
 use winit::{
     event_loop::EventLoop,
     window::WindowBuilder,
@@ -36,10 +39,10 @@ struct OclStuff {
 fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-                .with_resizable(false)
-                .with_inner_size(LogicalSize::new(WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32))
-                .build(&event_loop)
-                .expect("Failed to build window.");
+        .with_resizable(false)
+        .with_inner_size(LogicalSize::new(WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32))
+        .build(&event_loop)
+        .expect("Failed to build window.");
     // the graphics context is the abstraction through which images are written to the window, I think
     let mut graphics_context = unsafe { GraphicsContext::new(&window, &window) }.unwrap();
 
@@ -76,7 +79,7 @@ fn main() {
                 // std::thread::sleep(std::time::Duration::from_millis(10));
                 iter += 1;
                 iter_mod_print_interval += 1;
-                if iter_mod_print_interval == 100 {
+                if iter_mod_print_interval == 1000 {
                     println!("iter: {iter}");
                     iter_mod_print_interval = 0;
                 }
@@ -94,9 +97,9 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
     };
 
     let pro_que = ocl::ProQue::builder()
-                  .src(src)
-                  .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
-                  .build().unwrap();
+        .src(src)
+        .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
+        .build().unwrap();
 
     let h_buffer = ocl::Buffer::<f32>::builder()
         .queue(pro_que.queue().clone())
@@ -106,25 +109,25 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .build().expect("Failed to build h buffer.");
 
     let image = ocl::Image::<u32>::builder()
-                .queue(pro_que.queue().clone())
-                .image_type(MemObjectType::Image2d)
-                // `softbuffer` expects each pixel to be a u32 `0rgb`, where each component is 8 bits.
-                // Note that the first component is expected to be 0!
-                /* Using single-channel UnsignedInt32 for the OpenCL image because:
-                    The alternative is using 4-channel 8-bit, and reinterpreting the &[u8] as &[u32] after
-                    copying the data to host. The problem is that the correctness of the reinterpretation
-                    depends on the endianness of the CPU architecture, which is not something I want to keep
-                    track of.
-                */
-                .channel_order(ImageChannelOrder::R)
-                .channel_data_type(ImageChannelDataType::UnsignedInt32)
-                .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
-                .flags(
-                    // note: CL_MEM_KERNEL_READ_AND_WRITE support is not guaranteed under OpenCL 3.0
-                    MemFlags::WRITE_ONLY | // kernel will only render to it
-                    MemFlags::HOST_READ_ONLY // host will read so that `softbuffer` can display the image
-                )
-                .build().expect("Failed to build OpenCL image.");
+        .queue(pro_que.queue().clone())
+        .image_type(MemObjectType::Image2d)
+        // `softbuffer` expects each pixel to be a u32 `0rgb`, where each component is 8 bits.
+        // Note that the first component is expected to be 0!
+        /* Using single-channel UnsignedInt32 for the OpenCL image because:
+            The alternative is using 4-channel 8-bit, and reinterpreting the &[u8] as &[u32] after
+            copying the data to host. The problem is that the correctness of the reinterpretation
+            depends on the endianness of the CPU architecture, which is not something I want to keep
+            track of.
+        */
+        .channel_order(ImageChannelOrder::R)
+        .channel_data_type(ImageChannelDataType::UnsignedInt32)
+        .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
+        .flags(
+            // note: CL_MEM_KERNEL_READ_AND_WRITE support is not guaranteed under OpenCL 3.0
+            MemFlags::WRITE_ONLY | // kernel will only render to it
+            MemFlags::HOST_READ_ONLY // host will read so that `softbuffer` can display the image
+        )
+        .build().expect("Failed to build OpenCL image.");
 
     let iteration_kernel = pro_que.kernel_builder("iterate")
         .global_work_size(initial_h_values.len())
