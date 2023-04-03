@@ -7,13 +7,30 @@ kernel void iterate(global float* h, float dx, float dt, float background_flow_s
     uint grid_size = get_global_size(0);
 
     // compute dh using centered difference
-    float dh;
-    if (gid == 0) dh = (h[1] - h[grid_size - 1]) * 0.5;
-    else if (gid == grid_size - 1) dh = (h[0] - h[grid_size - 2]) * 0.5;
-    else dh = (h[gid + 1] - h[gid - 1]) * 0.5;
+    float dh_by_dx;
+    if (gid == 0) dh_by_dx = (h[1] - h[grid_size - 1]) * 0.5f;
+    else if (gid == grid_size - 1) dh_by_dx = (h[0] - h[grid_size - 2]) * 0.5f;
+    else dh_by_dx = (h[gid + 1] - h[gid - 1]) * 0.5f;
+    dh_by_dx /= dx;
+
+    /* Using classic Runge-Kutta integration, with time-step `Dt`:
+        h_next = h + 1/6 * (k1 + 2*k2 + 2*k3 + k4) * dt
+        where
+            k1 = f(t, h)
+            k2 = f(t + Dt/2, h + Dt/2 * k1)
+            k3 = f(t + Dt/2, h + Dt/2 * k2)
+            k4 = f(t + Dt, h + Dt * k3)
+            dh/dt = f(t, h) = -background_flow_speed * dh/dx ; (doesn't involve t)
+    */
+    float h_current = h[gid];
+    float k1 = -background_flow_speed * (dh_by_dx             );
+    float k2 = -background_flow_speed * (dh_by_dx + 0.5f*dt*k1);
+    float k3 = -background_flow_speed * (dh_by_dx + 0.5f*dt*k2);
+    float k4 = -background_flow_speed * (dh_by_dx +      dt*k3);
+    float h_next = h_current + 1.f / 6.f * (k1 + 2.f*k2 + 2.f*k3 + k4) * dt;
 
     barrier(CLK_GLOBAL_MEM_FENCE); // make sure all invocations have read from `h` before writing back to it
-    h[gid] -= background_flow_speed * (dh / dx) * dt;
+    h[gid] = h_next;
 }
 
 // RENDERING CODE --------------------------------------------------------------------------------------------
@@ -46,9 +63,9 @@ kernel void render(write_only image2d_t render_target, global float* h, uint h_s
     float pixel_ycoord_normalized = (float)pixel_ycoord / (float)(height - 1);
 
     float h_coord_float = pixel_xcoord_normalized * (float)(h_size - 1);
-    float h_val = (h[(int)floor(h_coord_float)] + h[(int)ceil(h_coord_float)]) * (float)0.5;
+    float h_val = (h[(int)floor(h_coord_float)] + h[(int)ceil(h_coord_float)]) * 0.5f;
 
-    float axis_ycoord_normalized = (float)1. - pixel_ycoord_normalized; // because image y-axis is upside-down
+    float axis_ycoord_normalized = 1.f - pixel_ycoord_normalized; // because image y-axis is upside-down
     float axis_ycoord = axis_ycoord_normalized * (axis_max - axis_min) + axis_min;
     float pixel_is_in_fluid = step(axis_ycoord, h_val);
     float3 color = pixel_is_in_fluid * (float3)(0., 0.5, 1.);
