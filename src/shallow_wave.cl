@@ -1,17 +1,23 @@
-/* @todo dt and dx should be specialization constants; @todo but those are only available in OpenCL 2.2+, and
-    I don't think the `ocl` crate even supports them. Might have to do some cursed C code creation at runtime,
-    or use the -D flag in the kernel/program compilation step
+/* These constants must be defined using the '-D' flag when compiling the kernels.
+We rename them all here so that the IDE doesn't display "undeclared identifier" errors all over the rest of
+the file, and so that their types are explicit.
 */
-kernel void iterate(global float* h, float dx, float dt, float background_flow_speed) {
-    uint gid = get_global_id(0);
-    uint grid_size = get_global_size(0);
+static constant const float DT = TIME_STEP;
+static constant const float DX = SPACIAL_STEP;
+static constant const float BG_FLOW_SPEED = BACKGROUND_FLOW_SPEED;
+static constant const uint  H_SIZE = N_GRIDPOINTS;
 
-    // compute dh using centered difference
+#define ONE_OVER_SIX 0.1666666666666666666666666666666666666f
+
+kernel void iterate(global float* h) {
+    uint gid = get_global_id(0);
+
+    // compute spatial gradient using centered difference
     float dh_by_dx;
-    if (gid == 0) dh_by_dx = (h[1] - h[grid_size - 1]) * 0.5f;
-    else if (gid == grid_size - 1) dh_by_dx = (h[0] - h[grid_size - 2]) * 0.5f;
+    if (gid == 0) dh_by_dx = (h[1] - h[H_SIZE - 1]) * 0.5f;
+    else if (gid == H_SIZE - 1) dh_by_dx = (h[0] - h[H_SIZE - 2]) * 0.5f;
     else dh_by_dx = (h[gid + 1] - h[gid - 1]) * 0.5f;
-    dh_by_dx /= dx;
+    dh_by_dx /= DX;
 
     /* Using classic Runge-Kutta integration, with time-step `Dt`:
         h_next = h + 1/6 * (k1 + 2*k2 + 2*k3 + k4) * dt
@@ -23,11 +29,11 @@ kernel void iterate(global float* h, float dx, float dt, float background_flow_s
             dh/dt = f(t, h) = -background_flow_speed * dh/dx ; (doesn't involve t)
     */
     float h_current = h[gid];
-    float k1 = -background_flow_speed * (dh_by_dx             );
-    float k2 = -background_flow_speed * (dh_by_dx + 0.5f*dt*k1);
-    float k3 = -background_flow_speed * (dh_by_dx + 0.5f*dt*k2);
-    float k4 = -background_flow_speed * (dh_by_dx +      dt*k3);
-    float h_next = h_current + 1.f / 6.f * (k1 + 2.f*k2 + 2.f*k3 + k4) * dt;
+    float k1 = -BG_FLOW_SPEED * (dh_by_dx             );
+    float k2 = -BG_FLOW_SPEED * (dh_by_dx + 0.5f*DT*k1);
+    float k3 = -BG_FLOW_SPEED * (dh_by_dx + 0.5f*DT*k2);
+    float k4 = -BG_FLOW_SPEED * (dh_by_dx +      DT*k3);
+    float h_next = h_current + ONE_OVER_SIX * (k1 + 2.f*k2 + 2.f*k3 + k4) * DT;
 
     barrier(CLK_GLOBAL_MEM_FENCE); // make sure all invocations have read from `h` before writing back to it
     h[gid] = h_next;
@@ -51,8 +57,7 @@ void convert_and_write_image(write_only image2d_t image, int2 coord, float3 colo
 `h_size` is the length of the `h` array.
 Expects `render_target` to be a single-channel `UnsignedInt32` of the form `00000000rrrrrrrrggggggggbbbbbbbb`
 */
-// @todo maybe some of these should be specialization constants?
-kernel void render(write_only image2d_t render_target, global float* h, uint h_size, float axis_min, float axis_max) {
+kernel void render(write_only image2d_t render_target, global float* h, float axis_min, float axis_max) {
     int pixel_xcoord = get_global_id(0);
     int pixel_ycoord = get_global_id(1);
 
@@ -62,7 +67,7 @@ kernel void render(write_only image2d_t render_target, global float* h, uint h_s
     float pixel_xcoord_normalized = (float)pixel_xcoord / (float)(width  - 1);
     float pixel_ycoord_normalized = (float)pixel_ycoord / (float)(height - 1);
 
-    float h_coord_float = pixel_xcoord_normalized * (float)(h_size - 1);
+    float h_coord_float = pixel_xcoord_normalized * (float)(H_SIZE - 1);
     float h_val = (h[(int)floor(h_coord_float)] + h[(int)ceil(h_coord_float)]) * 0.5f;
 
     float axis_ycoord_normalized = 1.f - pixel_ycoord_normalized; // because image y-axis is upside-down

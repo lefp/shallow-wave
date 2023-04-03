@@ -96,16 +96,35 @@ fn main() {
     })
 }
 
-fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
-    let src = {
-        let mut src = String::new();
-        File::open("src/shallow_wave.cl").unwrap().read_to_string(&mut src).unwrap();
-        src
-    };
+/* A stupid hack for creating kernel-compile-time float constants in OpenCl kernels.
+A VERY stupid hack. Just fucking dumb. Assumes that the format of the string representing the float preserves
+enough information to maintain correctness, which could easily be false; especially for numbers very close
+to 0.
+I don't know of a better way to do this.
+@todo One option is SPIR-V specialization constants. But that isn't supported in OpenCL 1.2 and the `ocl`
+crate, so you'll have to use a different crate and explicitly query support from the OpenCL runtime/device.
+*/
+trait CursedOclF32CompileTimeConstantTrait {
+    fn cmplr_def_f32<'a, S: Into<String>>(&'a mut self, name: S, val: f32) -> &'a mut Self;
+}
+impl<'b> CursedOclF32CompileTimeConstantTrait for ocl::builders::ProgramBuilder<'b> {
+    fn cmplr_def_f32<'a, S: Into<String>>(&'a mut self, name: S, val: f32) -> &'a mut Self {
+        let opt = format!("-D{}={:.100}", name.into(), val);
+        println!("{opt}"); // @debug
+        self.cmplr_opt(opt)
+    }
+}
 
+fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
+    let mut prog_builder = ocl::Program::builder();
+    prog_builder
+        .src_file("src/shallow_wave.cl")
+        .cmplr_def_f32("TIME_STEP", TIME_STEP)
+        .cmplr_def_f32("SPACIAL_STEP", SPACIAL_STEP)
+        .cmplr_def_f32("BACKGROUND_FLOW_SPEED", BACKGROUND_FLOW_SPEED)
+        .cmplr_def("N_GRIDPOINTS", N_GRIDPOINTS as i32);
     let pro_que = ocl::ProQue::builder()
-        .src(src)
-        .dims((WINDOW_WIDTH, WINDOW_HEIGHT))
+        .prog_bldr(prog_builder)
         .build().unwrap();
 
     let h_buffer = ocl::Buffer::<f32>::builder()
@@ -139,16 +158,12 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
     let iteration_kernel = pro_que.kernel_builder("iterate")
         .global_work_size(initial_h_values.len())
         .arg_named("h", h_buffer.clone())
-        .arg_named("dx", SPACIAL_STEP)
-        .arg_named("dt", TIME_STEP)
-        .arg_named("background_flow_speed", BACKGROUND_FLOW_SPEED)
         .build().expect("Failed to build iteration kernel.");
 
     let render_kernel = pro_que.kernel_builder("render")
         .global_work_size((WINDOW_WIDTH, WINDOW_HEIGHT))
         .arg_named("render_target", image.clone())
         .arg_named("h", h_buffer.clone())
-        .arg_named("h_size", initial_h_values.len() as u32)
         .arg_named("axis_min", axis_bounds[0])
         .arg_named("axis_max", axis_bounds[1])
         .build().expect("Failed to build render kernel.");
