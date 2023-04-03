@@ -6,17 +6,23 @@ const TIME_STEP: f32 = 0.001;
 const GAUSSIAN_INITIALIZER_DECAY: f32 = 0.005;
 const AXIS_BOUNDS: [f32; 2] = [0., 1.]; // bottom and top of the wave height axis to be displayed
 const BACKGROUND_FLOW_SPEED: f32 = 1.;
+const RENDER_FPS: f32 = 60.;
 
 // derived constants
 const SPACIAL_STEP: f32 = SPACIAL_DOMAIN_SIZE / N_GRIDPOINTS as f32;
 const GRID_ENDPOINT: f32 = SPACIAL_STEP * (N_GRIDPOINTS - 1) as f32;
 const GRID_CENTERPOINT: f32 = 0.5 * GRID_ENDPOINT;
+const RENDER_INTERVAL: f32 = 1. / RENDER_FPS;
 
-use std::{fs::File, io::Read};
+use std::{
+    fs::File,
+    io::Read,
+    time::{self, Duration},
+};
 
 use ocl::{
     enums::{MemObjectType, ImageChannelOrder, ImageChannelDataType},
-    MemFlags
+    MemFlags,
 };
 use winit::{
     event_loop::EventLoop,
@@ -57,32 +63,33 @@ fn main() {
     let mut image_hostbuffer = vec![0u32; WINDOW_WIDTH * WINDOW_HEIGHT];
 
     let mut iter = 0;
-    let mut iter_mod_print_interval = 0;
+    let mut iter_display_timer = time::Instant::now();
+    let mut frame_timer = time::Instant::now();
+    let frame_duration = Duration::from_secs_f32(RENDER_INTERVAL);
     event_loop.run(move |event, _, control_flow| {
         control_flow.set_poll(); // Continuously runs the event loop, as opposed to `set_wait`
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => { control_flow.set_exit(); },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
-                /* @todo we redraw on every iteration of the event loop for now. If that changes, move the
-                drawing code to the RedrawRequested arm of the match statement.
-                */
+                unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); }
+                // std::thread::sleep(std::time::Duration::from_millis(10));
 
-                // render and display image
-                unsafe {
-                    ocl_stuff.iteration_kernel.cmd().enq().unwrap();
-                    ocl_stuff.render_kernel.enq().unwrap();
+                // print iteration number if needed
+                iter += 1;
+                if iter_display_timer.elapsed() >= Duration::from_secs(1) {
+                    println!("iter: {iter}");
+                    iter_display_timer = time::Instant::now();
                 }
+
+                // update display if needed. We don't do this on every iteration because it's slow
+                if frame_timer.elapsed() >= frame_duration { window.request_redraw(); }
+            },
+            Event::RedrawRequested(..) => {
+                unsafe { ocl_stuff.render_kernel.enq().unwrap(); }
                 ocl_stuff.image.read(image_hostbuffer.as_mut_slice()).enq().unwrap();
                 graphics_context.set_buffer(image_hostbuffer.as_ref(), WINDOW_WIDTH as u16, WINDOW_HEIGHT as u16);
-
-                // std::thread::sleep(std::time::Duration::from_millis(10));
-                iter += 1;
-                iter_mod_print_interval += 1;
-                if iter_mod_print_interval == 1000 {
-                    println!("iter: {iter}");
-                    iter_mod_print_interval = 0;
-                }
+                frame_timer = time::Instant::now();
             },
             _ => {},
         }
