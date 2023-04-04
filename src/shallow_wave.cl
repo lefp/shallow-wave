@@ -4,39 +4,81 @@ the file, and so that their types are explicit.
 */
 static constant const float DT = TIME_STEP;
 static constant const float DX = SPACIAL_STEP;
-static constant const float BG_FLOW_SPEED = BACKGROUND_FLOW_SPEED;
-static constant const uint  H_SIZE = N_GRIDPOINTS;
+static constant const int   H_SIZE = N_GRIDPOINTS;
 
-#define ONE_OVER_SIX 0.1666666666666666666666666666666666666f
+// acceleration due to gravity
+#define G 9.81f
 
-kernel void iterate(global float* h) {
-    uint gid = get_global_id(0);
+kernel void iterate(global float* h, global float* v) {
+    // @todo current version is numerically unstable
+    /* Assuming an incompressible fluid (i.e. constant density) and 1 horizontal dimension:
+    Let
+        rho = density
+        h = fluid height or depth or whatever (distance between fluid surface and riverbed)
+        v = horizontal fluid velocity (mean across column, but we don't need to worry about that)
+        g = acceleration due to gravity.
+    Then
+        rho dh/dt + rho d(hv)/dx = 0
+        rho d(hv)/dt + d/dx (rho h v^2 + 1/2 rho g h^2) = 0.
+    Expanding part of the latter equation using product rule,
+        rho dh/dt + rho d(hv)/dx = 0
+        rho (dh/dt v + dv/dt h) + d/dx (rho h v^2 + 1/2 rho g h^2) = 0.
+    Rearranging,
+        dh/dt = - d(hv)/dx
+        dv/dt = (-d/dx (h v^2 + 1/2 g h^2) - dh/dt v) / h.
+                        -----------------
+                        let's call this term q (name chosen arbitrarily)
+    @note This is invalid for h=0, so we need to ensure that h=0 doesn't happen.
 
-    // compute spatial gradient using centered difference
-    float dh_by_dx;
-    if (gid == 0) dh_by_dx = (h[1] - h[H_SIZE - 1]) * 0.5f;
-    else if (gid == H_SIZE - 1) dh_by_dx = (h[0] - h[H_SIZE - 2]) * 0.5f;
-    else dh_by_dx = (h[gid + 1] - h[gid - 1]) * 0.5f;
-    dh_by_dx /= DX;
-
-    /* Using classic Runge-Kutta integration, with time-step `Dt`:
-        h_next = h + 1/6 * (k1 + 2*k2 + 2*k3 + k4) * dt
-        where
-            k1 = f(t, h)
-            k2 = f(t + Dt/2, h + Dt/2 * k1)
-            k3 = f(t + Dt/2, h + Dt/2 * k2)
-            k4 = f(t + Dt, h + Dt * k3)
-            dh/dt = f(t, h) = -background_flow_speed * dh/dx ; (doesn't involve t)
+    We can compute all the spatial gradients using finite difference.
+    Then we compute dh/dt, and use that to compute dv/dt.
     */
-    float h_current = h[gid];
-    float k1 = -BG_FLOW_SPEED * (dh_by_dx             );
-    float k2 = -BG_FLOW_SPEED * (dh_by_dx + 0.5f*DT*k1);
-    float k3 = -BG_FLOW_SPEED * (dh_by_dx + 0.5f*DT*k2);
-    float k4 = -BG_FLOW_SPEED * (dh_by_dx +      DT*k3);
-    float h_next = h_current + ONE_OVER_SIX * (k1 + 2.f*k2 + 2.f*k3 + k4) * DT;
 
-    barrier(CLK_GLOBAL_MEM_FENCE); // make sure all invocations have read from `h` before writing back to it
-    h[gid] = h_next;
+    int gid = get_global_id(0);
+    // boundary condition: cyclic (i.e. right boundary is adjacent to left boundary)
+    // @todo there has got to be a branchless way of doing this. @note % operator can return negative values.
+    int prev_ind;
+    int next_ind;
+    if (gid == 0) {
+        prev_ind = H_SIZE - 1;
+        next_ind = 1;
+    }
+    else if (gid == H_SIZE - 1) {
+        prev_ind = H_SIZE - 2;
+        next_ind = 0;
+    }
+    else {
+        prev_ind = gid - 1;
+        next_ind = gid + 1;
+    }
+    /*
+        h_b : h_back,    i.e. h at previous grid point
+        h_c : h_center,  i.e. h at this invocation's grid point
+        h_f : h_forward, i.e. h at next grid point
+    */
+    float h_b = h[prev_ind];
+    float h_c = h[gid];
+    float h_f = h[next_ind];
+    float v_b = v[prev_ind];
+    float v_c = v[gid];
+    float v_f = v[next_ind];
+
+    // @todo some of these computations are redundant, and some can be done at compile-time
+    float dhv_by_dx = (h_f*v_f - h_b*v_b) * 0.5 / DX;
+    float dq_by_dx = (
+        ( h_f*(v_f*v_f) + 0.5*G*(h_f*h_f) )
+      - ( h_b*(v_b*v_b) + 0.5*G*(h_b*h_b) )
+    ) * 0.5 / DX;
+    float dh_by_dt = -dhv_by_dx;
+    float dv_by_dt = (-dq_by_dx - dh_by_dt*v_c) / h_c;
+
+    // @todo maybe some fancier time integration method (Runge-Kutta?)
+    float h_new = h_c + dh_by_dt*DT;
+    float v_new = v_c + dv_by_dt*DT;
+
+    barrier(CLK_GLOBAL_MEM_FENCE); // make sure all invocations have read from the buffers we're gonna modify
+    h[gid] = h_new;
+    v[gid] = v_new;
 }
 
 // RENDERING CODE --------------------------------------------------------------------------------------------

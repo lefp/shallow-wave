@@ -2,10 +2,10 @@ const WINDOW_WIDTH:  usize = 800;
 const WINDOW_HEIGHT: usize = 600;
 const SPACIAL_DOMAIN_SIZE: f32 = 100.;
 const N_GRIDPOINTS: usize = 1000;
-const TIME_STEP: f32 = 0.001;
-const GAUSSIAN_INITIALIZER_DECAY: f32 = 0.005;
-const AXIS_BOUNDS: [f32; 2] = [0., 1.]; // bottom and top of the wave height axis to be displayed
-const BACKGROUND_FLOW_SPEED: f32 = 1.;
+const TIME_STEP: f32 = 0.00001;
+const FLUID_DEPTH: f32 = 1.0; // do not set to 0, else expect freaky behavior
+const GAUSSIAN_INITIALIZER_DECAY: f32 = 0.05;
+const INIT_VELOCITY: f32 = 10.0;
 const RENDER_FPS: f32 = 60.;
 
 // derived constants
@@ -54,9 +54,11 @@ fn main() {
 
     let ocl_stuff = {
         let initial_h_values: Vec<f32> = (0..N_GRIDPOINTS).map(|i| {
+            FLUID_DEPTH +
             f32::exp(-GAUSSIAN_INITIALIZER_DECAY * (i as f32 * SPACIAL_STEP - GRID_CENTERPOINT).powi(2))
         }).collect();
-        set_up_opencl(&initial_h_values, AXIS_BOUNDS)
+        let max_initial_h = initial_h_values.iter().copied().reduce(f32::max).unwrap();
+        set_up_opencl(&initial_h_values, [0f32, max_initial_h])
     };
 
     // each u32 represents a color: 8 bits of nothing, then 8 bits each of R, G, B
@@ -73,7 +75,6 @@ fn main() {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => { control_flow.set_exit(); },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
                 unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); }
-                // std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // print iteration number if needed
                 iter += 1;
@@ -120,7 +121,6 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .src_file("src/shallow_wave.cl")
         .cmplr_def_f32("TIME_STEP", TIME_STEP)
         .cmplr_def_f32("SPACIAL_STEP", SPACIAL_STEP)
-        .cmplr_def_f32("BACKGROUND_FLOW_SPEED", BACKGROUND_FLOW_SPEED)
         .cmplr_def("N_GRIDPOINTS", N_GRIDPOINTS as i32);
     let pro_que = ocl::ProQue::builder()
         .prog_bldr(prog_builder)
@@ -132,6 +132,13 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .copy_host_slice(initial_h_values)
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
         .build().expect("Failed to build h buffer.");
+
+    let v_buffer = ocl::Buffer::<f32>::builder()
+        .queue(pro_que.queue().clone())
+        .len(initial_h_values.len())
+        .fill_val(INIT_VELOCITY) // 0-initialize
+        .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
+        .build().expect("Failed to build v buffer.");
 
     let image = ocl::Image::<u32>::builder()
         .queue(pro_que.queue().clone())
@@ -157,6 +164,7 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
     let iteration_kernel = pro_que.kernel_builder("iterate")
         .global_work_size(initial_h_values.len())
         .arg_named("h", h_buffer.clone())
+        .arg_named("v", v_buffer.clone())
         .build().expect("Failed to build iteration kernel.");
 
     let render_kernel = pro_que.kernel_builder("render")
