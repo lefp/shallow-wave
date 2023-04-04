@@ -96,20 +96,19 @@ fn main() {
     })
 }
 
-/* A stupid hack for creating kernel-compile-time float constants in OpenCl kernels.
-A VERY stupid hack. Just fucking dumb. Assumes that the format of the string representing the float preserves
-enough information to maintain correctness, which could easily be false; especially for numbers very close
-to 0.
+/* A stupid hack for defining float constants in kernels at kernel-compile-time.
+A little information is probably lost in the `float -> decimal string -> float` conversion.
 I don't know of a better way to do this.
 @todo One option is SPIR-V specialization constants. But that isn't supported in OpenCL 1.2 and the `ocl`
 crate, so you'll have to use a different crate and explicitly query support from the OpenCL runtime/device.
 */
-trait CursedOclF32CompileTimeConstantTrait {
+trait OclCompileTimeF32ConstantHack {
     fn cmplr_def_f32<'a, S: Into<String>>(&'a mut self, name: S, val: f32) -> &'a mut Self;
 }
-impl<'b> CursedOclF32CompileTimeConstantTrait for ocl::builders::ProgramBuilder<'b> {
+impl<'b> OclCompileTimeF32ConstantHack for ocl::builders::ProgramBuilder<'b> {
     fn cmplr_def_f32<'a, S: Into<String>>(&'a mut self, name: S, val: f32) -> &'a mut Self {
-        let opt = format!("-D{}={:.100}", name.into(), val);
+        // exponential notation is to avoid losing information for numbers very close 0
+        let opt = format!("-D{}={:.100e}", name.into(), val);
         println!("{opt}"); // @debug
         self.cmplr_opt(opt)
     }
