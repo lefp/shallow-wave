@@ -4,6 +4,7 @@ const SPACIAL_DOMAIN_SIZE: f32 = 100.;
 const N_GRIDPOINTS: usize = 1000;
 const TIME_STEP: f32 = 0.00001;
 const FLUID_DEPTH: f32 = 1.0; // do not set to 0, else expect freaky behavior
+const INIT_WAVE_HEIGHT: f32 = 0.5; // height of the wave above the rest of the fluid surface
 const GAUSSIAN_INITIALIZER_DECAY: f32 = 0.05;
 const INIT_VELOCITY: f32 = 10.0;
 const RENDER_FPS: f32 = 60.;
@@ -55,6 +56,7 @@ fn main() {
     let ocl_stuff = {
         let initial_h_values: Vec<f32> = (0..N_GRIDPOINTS).map(|i| {
             FLUID_DEPTH +
+            INIT_WAVE_HEIGHT *
             f32::exp(-GAUSSIAN_INITIALIZER_DECAY * (i as f32 * SPACIAL_STEP - GRID_CENTERPOINT).powi(2))
         }).collect();
         let max_initial_h = initial_h_values.iter().copied().reduce(f32::max).unwrap();
