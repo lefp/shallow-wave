@@ -36,21 +36,9 @@ kernel void iterate(global float* h, global float* v) {
 
     int gid = get_global_id(0);
     // boundary condition: cyclic (i.e. right boundary is adjacent to left boundary)
-    // @todo there has got to be a branchless way of doing this. @note % operator can return negative values.
-    int prev_ind;
-    int next_ind;
-    if (gid == 0) {
-        prev_ind = H_SIZE - 1;
-        next_ind = 1;
-    }
-    else if (gid == H_SIZE - 1) {
-        prev_ind = H_SIZE - 2;
-        next_ind = 0;
-    }
-    else {
-        prev_ind = gid - 1;
-        next_ind = gid + 1;
-    }
+    int next_ind = (gid+1) % H_SIZE;
+    int prev_ind = (gid-1 + H_SIZE) % H_SIZE; // + H_SIZE so that % doesn't return a negative value
+
     /*
         h_b : h_back,    i.e. h at previous grid point
         h_c : h_center,  i.e. h at this invocation's grid point
