@@ -1,18 +1,19 @@
 const WINDOW_WIDTH:  usize = 800;
 const WINDOW_HEIGHT: usize = 600;
-const SPACIAL_DOMAIN_SIZE: f32 = 100.;
+const SPACIAL_DOMAIN_SIZE: f32 = 25.;
 const N_GRIDPOINTS: usize = 1000;
 const TIME_STEP: f32 = 0.00001;
 const FLUID_DEPTH: f32 = 1.0; // do not set to 0, else expect freaky behavior
-const INIT_WAVE_HEIGHT: f32 = 0.5; // height of the wave above the rest of the fluid surface
+const INIT_WAVE_HEIGHT: f32 = 0.1; // height of the wave above the rest of the fluid surface
 const GAUSSIAN_INITIALIZER_DECAY: f32 = 0.05;
-const INIT_VELOCITY: f32 = 10.0;
+const INIT_WAVE_CENTERPOINT_RELATIVE: f32 = 0.75; // "relative" meaning "in normalized [0, 1] coordinates"
+const INIT_VELOCITY: f32 = 00.0;
 const RENDER_FPS: f32 = 60.;
 
 // derived constants
 const SPACIAL_STEP: f32 = SPACIAL_DOMAIN_SIZE / N_GRIDPOINTS as f32;
 const GRID_ENDPOINT: f32 = SPACIAL_STEP * (N_GRIDPOINTS - 1) as f32;
-const GRID_CENTERPOINT: f32 = 0.5 * GRID_ENDPOINT;
+const INIT_WAVE_CENTERPOINT: f32 = INIT_WAVE_CENTERPOINT_RELATIVE * GRID_ENDPOINT;
 const RENDER_INTERVAL: f32 = 1. / RENDER_FPS;
 
 use std::{
@@ -57,10 +58,10 @@ fn main() {
         let initial_h_values: Vec<f32> = (0..N_GRIDPOINTS).map(|i| {
             FLUID_DEPTH +
             INIT_WAVE_HEIGHT *
-            f32::exp(-GAUSSIAN_INITIALIZER_DECAY * (i as f32 * SPACIAL_STEP - GRID_CENTERPOINT).powi(2))
+            f32::exp(-GAUSSIAN_INITIALIZER_DECAY * (i as f32 * SPACIAL_STEP - INIT_WAVE_CENTERPOINT).powi(2))
         }).collect();
         let max_initial_h = initial_h_values.iter().copied().reduce(f32::max).unwrap();
-        set_up_opencl(&initial_h_values, [0f32, max_initial_h])
+        set_up_opencl(&initial_h_values, [0.9f32*FLUID_DEPTH, max_initial_h])
     };
 
     // each u32 represents a color: 8 bits of nothing, then 8 bits each of R, G, B
@@ -87,6 +88,7 @@ fn main() {
 
                 // update display if needed. We don't do this on every iteration because it's slow
                 if frame_timer.elapsed() >= frame_duration { window.request_redraw(); }
+                // std::thread::sleep(Duration::from_secs_f32(0.01f32));
             },
             Event::RedrawRequested(..) => {
                 unsafe { ocl_stuff.render_kernel.enq().unwrap(); }

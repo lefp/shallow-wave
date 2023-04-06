@@ -39,6 +39,10 @@ kernel void iterate(global float* h, global float* v) {
     int next_ind = (gid+1) % H_SIZE;
     int prev_ind = (gid-1 + H_SIZE) % H_SIZE; // + H_SIZE so that % doesn't return a negative value
 
+    bool is_left_boundary  = gid == 0;
+    bool is_right_boundary = gid == H_SIZE-1;
+    bool is_boundary = is_left_boundary || is_right_boundary;
+
     /*
         h_b : h_back,    i.e. h at previous grid point
         h_c : h_center,  i.e. h at this invocation's grid point
@@ -60,9 +64,29 @@ kernel void iterate(global float* h, global float* v) {
     float dh_by_dt = -dhv_by_dx;
     float dv_by_dt = (-dq_by_dx - dh_by_dt*v_c) / h_c;
 
+    if (is_left_boundary) {
+        dhv_by_dx = (h_f*v_f - h_c*v_c) * 0.5f / DX;
+        dq_by_dx = (
+            ( h_f*(v_f*v_f) + 0.5*G*(h_f*h_f) )
+          - ( h_c*(v_c*v_c) + 0.5*G*(h_c*h_c) )
+        ) * 0.5f / DX;
+        dh_by_dt = -dhv_by_dx;
+        dv_by_dt = (-dq_by_dx - dh_by_dt*v_c) / h_c;
+    }
+    else if (is_right_boundary) {
+        dhv_by_dx = (h_c*v_c - h_b*v_b) * 0.5f / DX;
+        dq_by_dx = (
+            ( h_c*(v_c*v_c) + 0.5*G*(h_c*h_c) )
+          - ( h_b*(v_b*v_b) + 0.5*G*(h_b*h_b) )
+        ) * 0.5f / DX;
+        dh_by_dt = -dhv_by_dx;
+        dv_by_dt = (-dq_by_dx - dh_by_dt*v_c) / h_c;
+    }
+
     // @todo maybe some fancier time integration method (Runge-Kutta?)
     float h_new = h_c + dh_by_dt*DT;
     float v_new = v_c + dv_by_dt*DT;
+    if (is_boundary) v_new = -v_new;
 
     barrier(CLK_GLOBAL_MEM_FENCE); // make sure all invocations have read from the buffers we're gonna modify
     h[gid] = h_new;
