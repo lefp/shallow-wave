@@ -9,6 +9,18 @@ static constant const int   H_SIZE = N_GRIDPOINTS;
 // acceleration due to gravity
 #define G 9.81f
 
+float choose(bool condition, float val_if_true, float val_if_false) {
+    return condition*val_if_true + (!condition)*val_if_false;
+}
+/*
+Returns `factor` if `condition`; otherwise just returns 1.
+Use this for conditional multiplications, e.g.:
+    float result = mul_if(i_want_to_mul_by_5, 5.f)*thing_to_multiply;
+*/
+float mul_if(bool condition, float factor) {
+    return condition*factor + (float)(!condition);
+}
+
 kernel void iterate(global float* h, global float* v) {
     // @todo current version is numerically unstable
     /* Assuming an incompressible fluid (i.e. constant density) and 1 horizontal dimension:
@@ -32,61 +44,48 @@ kernel void iterate(global float* h, global float* v) {
 
     We can compute all the spatial gradients using finite difference.
     Then we compute dh/dt, and use that to compute dv/dt.
+
+    Boundary condition: reflective (i.e. wave just bounces off a wall)
     */
 
     int gid = get_global_id(0);
-    // boundary condition: cyclic (i.e. right boundary is adjacent to left boundary)
-    int next_ind = (gid+1) % H_SIZE;
-    int prev_ind = (gid-1 + H_SIZE) % H_SIZE; // + H_SIZE so that % doesn't return a negative value
-
     bool is_left_boundary  = gid == 0;
     bool is_right_boundary = gid == H_SIZE-1;
     bool is_boundary = is_left_boundary || is_right_boundary;
+    bool is_interior = !is_boundary;
+
+    /*
+    The indices ("ind_forward" and "ind_backward") used for the finite difference gradient computation.
+    We use centered difference on the interior, and forward or backward difference on the boundaries.
+    */
+    int ind_f = choose(is_right_boundary, gid, gid+1);
+    int ind_b = choose(is_left_boundary , gid, gid-1);
 
     /*
         h_b : h_back,    i.e. h at previous grid point
         h_c : h_center,  i.e. h at this invocation's grid point
         h_f : h_forward, i.e. h at next grid point
     */
-    float h_b = h[prev_ind];
+    float h_b = h[ind_b];
     float h_c = h[gid];
-    float h_f = h[next_ind];
-    float v_b = v[prev_ind];
+    float h_f = h[ind_f];
+    float v_b = v[ind_b];
     float v_c = v[gid];
-    float v_f = v[next_ind];
+    float v_f = v[ind_f];
 
     // @todo some of these computations are redundant, and some can be done at compile-time
-    float dhv_by_dx = (h_f*v_f - h_b*v_b) * 0.5 / DX;
+    float dhv_by_dx = (h_f*v_f - h_b*v_b) * mul_if(is_interior, 0.5f) / DX;
     float dq_by_dx = (
         ( h_f*(v_f*v_f) + 0.5*G*(h_f*h_f) )
       - ( h_b*(v_b*v_b) + 0.5*G*(h_b*h_b) )
-    ) * 0.5 / DX;
+    ) * mul_if(is_interior, 0.5f) / DX;
     float dh_by_dt = -dhv_by_dx;
     float dv_by_dt = (-dq_by_dx - dh_by_dt*v_c) / h_c;
-
-    if (is_left_boundary) {
-        dhv_by_dx = (h_f*v_f - h_c*v_c) * 0.5f / DX;
-        dq_by_dx = (
-            ( h_f*(v_f*v_f) + 0.5*G*(h_f*h_f) )
-          - ( h_c*(v_c*v_c) + 0.5*G*(h_c*h_c) )
-        ) * 0.5f / DX;
-        dh_by_dt = -dhv_by_dx;
-        dv_by_dt = (-dq_by_dx - dh_by_dt*v_c) / h_c;
-    }
-    else if (is_right_boundary) {
-        dhv_by_dx = (h_c*v_c - h_b*v_b) * 0.5f / DX;
-        dq_by_dx = (
-            ( h_c*(v_c*v_c) + 0.5*G*(h_c*h_c) )
-          - ( h_b*(v_b*v_b) + 0.5*G*(h_b*h_b) )
-        ) * 0.5f / DX;
-        dh_by_dt = -dhv_by_dx;
-        dv_by_dt = (-dq_by_dx - dh_by_dt*v_c) / h_c;
-    }
 
     // @todo maybe some fancier time integration method (Runge-Kutta?)
     float h_new = h_c + dh_by_dt*DT;
     float v_new = v_c + dv_by_dt*DT;
-    if (is_boundary) v_new = -v_new;
+    v_new *= mul_if(is_boundary, -1.f); // reflect
 
     barrier(CLK_GLOBAL_MEM_FENCE); // make sure all invocations have read from the buffers we're gonna modify
     h[gid] = h_new;
