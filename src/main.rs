@@ -7,7 +7,6 @@ const FLUID_DEPTH: f32 = 1.0; // do not set to 0, else expect freaky behavior
 const INIT_WAVE_HEIGHT: f32 = 0.1; // height of the wave above the rest of the fluid surface
 const GAUSSIAN_INITIALIZER_DECAY: f32 = 0.05;
 const INIT_WAVE_CENTERPOINT_RELATIVE: f32 = 0.75; // "relative" meaning "in normalized [0, 1] coordinates"
-const INIT_VELOCITY: f32 = 00.0;
 const RENDER_FPS: f32 = 60.;
 
 // derived constants
@@ -140,7 +139,7 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
     let v_buffer = ocl::Buffer::<f32>::builder()
         .queue(pro_que.queue().clone())
         .len(initial_h_values.len())
-        .fill_val(INIT_VELOCITY) // 0-initialize
+        .fill_val(0f32) // 0-initialize
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
         .build().expect("Failed to build v buffer.");
 
