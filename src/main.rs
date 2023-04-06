@@ -30,7 +30,7 @@ use winit::{
     window::WindowBuilder,
     event::{
         Event,
-        WindowEvent,
+        WindowEvent, KeyboardInput, ElementState, VirtualKeyCode,
     },
     dpi::LogicalSize,
 };
@@ -66,28 +66,41 @@ fn main() {
     // each u32 represents a color: 8 bits of nothing, then 8 bits each of R, G, B
     let mut image_hostbuffer = vec![0u32; WINDOW_WIDTH * WINDOW_HEIGHT];
 
+    let mut paused = true;
     let mut iter = 0;
     let mut iter_display_timer = time::Instant::now();
     let mut frame_timer = time::Instant::now();
     let frame_duration = Duration::from_secs_f32(RENDER_INTERVAL);
+    // note: `control_flow` defaults to `ControlFlow::Poll` before the event loop's first iteration
     event_loop.run(move |event, _, control_flow| {
-        control_flow.set_poll(); // Continuously runs the event loop, as opposed to `set_wait`
-
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => { control_flow.set_exit(); },
+            Event::WindowEvent { event: WindowEvent::KeyboardInput { input, .. }, .. } => {
+                if let KeyboardInput {
+                    virtual_keycode: Some(VirtualKeyCode::P),
+                    state: ElementState::Pressed,
+                    ..
+                } = input {
+                    paused = !paused;
+                    if paused { control_flow.set_wait(); } // don't waste CPU while paused
+                    else { control_flow.set_poll(); }
+                };
+            },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
-                unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); }
+                if !paused {
+                    unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); }
 
-                // print iteration number if needed
-                iter += 1;
-                if iter_display_timer.elapsed() >= Duration::from_secs(1) {
-                    println!("iter: {iter}");
-                    iter_display_timer = time::Instant::now();
+                    // print iteration number if needed
+                    iter += 1;
+                    if iter_display_timer.elapsed() >= Duration::from_secs(1) {
+                        println!("iter: {iter}");
+                        iter_display_timer = time::Instant::now();
+                    }
+
+                    // update display if needed. We don't do this on every iteration because it's slow
+                    if frame_timer.elapsed() >= frame_duration { window.request_redraw(); }
+                    // std::thread::sleep(Duration::from_secs_f32(0.01f32)); // @debug
                 }
-
-                // update display if needed. We don't do this on every iteration because it's slow
-                if frame_timer.elapsed() >= frame_duration { window.request_redraw(); }
-                // std::thread::sleep(Duration::from_secs_f32(0.01f32));
             },
             Event::RedrawRequested(..) => {
                 unsafe { ocl_stuff.render_kernel.enq().unwrap(); }
