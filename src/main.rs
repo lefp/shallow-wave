@@ -97,7 +97,7 @@ fn main() {
             },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
                 if !paused {
-                    unsafe { ocl_stuff.iteration_kernel.enq().unwrap(); } // @todo commenting this out prevents the crash. Why?
+                    unsafe { ocl_stuff.iteration_kernel.enq().unwrap(); }
 
                     // print iteration number if needed
                     iter += 1;
@@ -160,10 +160,10 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
         .build().expect("Failed to build h buffer.");
 
-    let w_buffer = ocl::Buffer::<f32>::builder()
+    let w_buffer = ocl::Buffer::<ocl::prm::Float2>::builder()
         .queue(pro_que.queue().clone())
         .len(initial_h_values.len())
-        .fill_val(0f32) // 0-initialize
+        .fill_val(ocl::prm::Float2::zero()) // 0-initialize
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
         .build().expect("Failed to build w buffer.");
 
