@@ -6,6 +6,9 @@ static constant const float DT = TIME_STEP;
 static constant const float DX = SPACIAL_STEP;
 static constant const int   H_SIZE = N_GRIDPOINTS_PER_DIM;
 
+static constant const float3 FLUID_COLOR = (float3)(0.0f, 0.5f, 1.0f);
+static constant const float3 BAD_COLOR   = (float3)(1.0f, 0.0f, 0.0f); // use to indicate errors
+
 // acceleration due to gravity
 #define G 9.81f
 
@@ -18,6 +21,9 @@ int gridindex_2d_to_1d(int2 ind) {
 }
 
 float choose_f(bool condition, float val_if_true, float val_if_false) {
+    return condition*val_if_true + (!condition)*val_if_false;
+}
+float3 choose_f3(bool condition, float3 val_if_true, float3 val_if_false) {
     return condition*val_if_true + (!condition)*val_if_false;
 }
 int2 choose_i2(bool condition, int2 val_if_true, int2 val_if_false) {
@@ -199,9 +205,10 @@ kernel void render(write_only image2d_t render_target, global float* h, float ax
     float h_val4 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_above))];
     float h_val = (h_val1 + h_val2 + h_val3 + h_val4) * 0.25f;
 
+    bool something_is_wrong = !isnormal(h_val); // +-zero, +-Inf, NaN, and subnormal values
     h_val = clamp(h_val, axis_min, axis_max);
     float brightness = (h_val - axis_min) / (axis_max - axis_min); // normalize to [0, 1]
-    float3 color = brightness * (float3)(0., 0.5, 1.);
+    float3 color = choose_f3(something_is_wrong, BAD_COLOR, brightness * FLUID_COLOR);
 
     convert_and_write_image(render_target, (int2)(pixel_xcoord, pixel_ycoord), color);
 }
