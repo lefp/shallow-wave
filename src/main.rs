@@ -97,7 +97,7 @@ fn main() {
             },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
                 if !paused {
-                    unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); } // @todo commenting this out prevents the crash. Why?
+                    unsafe { ocl_stuff.iteration_kernel.enq().unwrap(); } // @todo commenting this out prevents the crash. Why?
 
                     // print iteration number if needed
                     iter += 1;
@@ -189,7 +189,7 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .build().expect("Failed to build OpenCL image.");
 
     let iteration_kernel = pro_que.kernel_builder("iterate")
-        .global_work_size(initial_h_values.len())
+        .global_work_size([N_GRIDPOINTS_PER_DIM, N_GRIDPOINTS_PER_DIM])
         .arg_named("h", h_buffer.clone())
         .arg_named("w", w_buffer.clone())
         .build().expect("Failed to build iteration kernel.");
