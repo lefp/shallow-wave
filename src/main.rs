@@ -1,18 +1,23 @@
 const WINDOW_WIDTH:  usize = 800;
 const WINDOW_HEIGHT: usize = 600;
-const SPACIAL_DOMAIN_SIZE: f32 = 25.;
-const N_GRIDPOINTS_PER_DIM: usize = 1000;
+const SPACIAL_DOMAIN_SIZE: f32 = 25.; // @2d @todo make configurable per-dimension
+const N_GRIDPOINTS_PER_DIM: usize = 100; // @2d @todo make configurable per-dimension
 const TIME_STEP: f32 = 0.00001;
+const RENDER_FPS: f32 = 60.;
+
+// initial conditions
 const FLUID_DEPTH: f32 = 1.0; // do not set to 0, else expect freaky behavior
 const INIT_WAVE_HEIGHT: f32 = 0.1; // height of the wave above the rest of the fluid surface
-const GAUSSIAN_INITIALIZER_DECAY: f32 = 0.05;
-const INIT_WAVE_CENTERPOINT_RELATIVE: f32 = 0.75; // "relative" meaning "in normalized [0, 1] coordinates"
-const RENDER_FPS: f32 = 60.;
+const INIT_STDDEV_X: f32 = 1.0;
+const INIT_STDDEV_Y: f32 = 1.0;
+const INIT_WAVE_CENTERPOINT_RELATIVE_X: f32 = 0.75; // "relative" meaning "in normalized [0, 1] coordinates"
+const INIT_WAVE_CENTERPOINT_RELATIVE_Y: f32 = 0.50;
 
 // derived constants
 const SPACIAL_STEP: f32 = SPACIAL_DOMAIN_SIZE / N_GRIDPOINTS_PER_DIM as f32;
 const GRID_ENDPOINT: f32 = SPACIAL_STEP * (N_GRIDPOINTS_PER_DIM - 1) as f32;
-const INIT_WAVE_CENTERPOINT: f32 = INIT_WAVE_CENTERPOINT_RELATIVE * GRID_ENDPOINT;
+const INIT_WAVE_CENTERPOINT_X: f32 = INIT_WAVE_CENTERPOINT_RELATIVE_X * GRID_ENDPOINT;
+const INIT_WAVE_CENTERPOINT_Y: f32 = INIT_WAVE_CENTERPOINT_RELATIVE_Y * GRID_ENDPOINT;
 const RENDER_INTERVAL: f32 = 1. / RENDER_FPS;
 
 use std::{
@@ -43,6 +48,13 @@ struct OclStuff {
     render_kernel: ocl::Kernel,
 }
 
+fn gaussian2d<F: num::traits::Float>(xcoord: F, ycoord: F, stddev_x: F, stddev_y: F, center_x: F, center_y: F) -> F {
+    F::exp( -F::from(0.5).unwrap() * (
+        ((xcoord - center_x) / stddev_x).powi(2) +
+        ((ycoord - center_y) / stddev_y).powi(2)
+    ))
+}
+
 fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -54,17 +66,16 @@ fn main() {
     let mut graphics_context = unsafe { GraphicsContext::new(&window, &window) }.unwrap();
 
     let ocl_stuff = {
-        // @todo @2d update this when the number of gridpoints can be different for different dimensions
+        // @2d @todo update when number of gridpoints can be different for different dimensions
         let initial_h_values: Vec<f32> = (0..N_GRIDPOINTS_PER_DIM*N_GRIDPOINTS_PER_DIM).map(|i| {
-            let coords = [i % N_GRIDPOINTS_PER_DIM, i / N_GRIDPOINTS_PER_DIM];
+            let xcoord = (i % N_GRIDPOINTS_PER_DIM) as f32 * SPACIAL_STEP;
+            let ycoord = (i / N_GRIDPOINTS_PER_DIM) as f32 * SPACIAL_STEP;
             FLUID_DEPTH +
             INIT_WAVE_HEIGHT *
-            f32::exp(
-                // @todo @2d update this to allow different decays and centerpoints for different dimensions
-                - (
-                    GAUSSIAN_INITIALIZER_DECAY*(coords[0] as f32 * SPACIAL_STEP - INIT_WAVE_CENTERPOINT).powi(2) + 
-                    GAUSSIAN_INITIALIZER_DECAY*(coords[1] as f32 * SPACIAL_STEP - INIT_WAVE_CENTERPOINT).powi(2)
-                )
+            gaussian2d(
+                xcoord, ycoord,
+                INIT_STDDEV_X, INIT_STDDEV_Y,
+                INIT_WAVE_CENTERPOINT_X, INIT_WAVE_CENTERPOINT_Y
             )
         }).collect();
         let min_initial_h = initial_h_values.iter().copied().reduce(f32::min).unwrap();

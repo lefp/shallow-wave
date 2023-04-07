@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+num = "0.4.0"
 ocl = "0.19.4"
 softbuffer = "0.2.0"
 winit = "0.28.2"
