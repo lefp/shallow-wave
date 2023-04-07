@@ -193,10 +193,10 @@ kernel void render(write_only image2d_t render_target, global float* h, float ax
     int nearest_xcoord_right = (int) ceil(h_xcoord_float);
     int nearest_ycoord_below = (int)floor(h_ycoord_float);
     int nearest_ycoord_above = (int) ceil(h_ycoord_float);
-    float h_val1 = gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_below));
-    float h_val2 = gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_above));
-    float h_val3 = gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_below));
-    float h_val4 = gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_above));
+    float h_val1 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_below))];
+    float h_val2 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_above))];
+    float h_val3 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_below))];
+    float h_val4 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_above))];
     float h_val = (h_val1 + h_val2 + h_val3 + h_val4) * 0.25f;
 
     h_val = clamp(h_val, axis_min, axis_max);
