@@ -1,7 +1,7 @@
 const WINDOW_WIDTH:  usize = 800;
 const WINDOW_HEIGHT: usize = 600;
 const SPACIAL_DOMAIN_SIZE: f32 = 25.;
-const N_GRIDPOINTS: usize = 1000;
+const N_GRIDPOINTS_PER_DIM: usize = 1000;
 const TIME_STEP: f32 = 0.00001;
 const FLUID_DEPTH: f32 = 1.0; // do not set to 0, else expect freaky behavior
 const INIT_WAVE_HEIGHT: f32 = 0.1; // height of the wave above the rest of the fluid surface
@@ -10,8 +10,8 @@ const INIT_WAVE_CENTERPOINT_RELATIVE: f32 = 0.75; // "relative" meaning "in norm
 const RENDER_FPS: f32 = 60.;
 
 // derived constants
-const SPACIAL_STEP: f32 = SPACIAL_DOMAIN_SIZE / N_GRIDPOINTS as f32;
-const GRID_ENDPOINT: f32 = SPACIAL_STEP * (N_GRIDPOINTS - 1) as f32;
+const SPACIAL_STEP: f32 = SPACIAL_DOMAIN_SIZE / N_GRIDPOINTS_PER_DIM as f32;
+const GRID_ENDPOINT: f32 = SPACIAL_STEP * (N_GRIDPOINTS_PER_DIM - 1) as f32;
 const INIT_WAVE_CENTERPOINT: f32 = INIT_WAVE_CENTERPOINT_RELATIVE * GRID_ENDPOINT;
 const RENDER_INTERVAL: f32 = 1. / RENDER_FPS;
 
@@ -54,13 +54,22 @@ fn main() {
     let mut graphics_context = unsafe { GraphicsContext::new(&window, &window) }.unwrap();
 
     let ocl_stuff = {
-        let initial_h_values: Vec<f32> = (0..N_GRIDPOINTS).map(|i| {
+        // @todo @2d update this when the number of gridpoints can be different for different dimensions
+        let initial_h_values: Vec<f32> = (0..N_GRIDPOINTS_PER_DIM*N_GRIDPOINTS_PER_DIM).map(|i| {
+            let coords = [i % N_GRIDPOINTS_PER_DIM, i / N_GRIDPOINTS_PER_DIM];
             FLUID_DEPTH +
             INIT_WAVE_HEIGHT *
-            f32::exp(-GAUSSIAN_INITIALIZER_DECAY * (i as f32 * SPACIAL_STEP - INIT_WAVE_CENTERPOINT).powi(2))
+            f32::exp(
+                // @todo @2d update this to allow different decays and centerpoints for different dimensions
+                - (
+                    GAUSSIAN_INITIALIZER_DECAY*(coords[0] as f32 * SPACIAL_STEP - INIT_WAVE_CENTERPOINT).powi(2) + 
+                    GAUSSIAN_INITIALIZER_DECAY*(coords[1] as f32 * SPACIAL_STEP - INIT_WAVE_CENTERPOINT).powi(2)
+                )
+            )
         }).collect();
+        let min_initial_h = initial_h_values.iter().copied().reduce(f32::min).unwrap();
         let max_initial_h = initial_h_values.iter().copied().reduce(f32::max).unwrap();
-        set_up_opencl(&initial_h_values, [0.9f32*FLUID_DEPTH, max_initial_h])
+        set_up_opencl(&initial_h_values, [min_initial_h, max_initial_h])
     };
 
     // each u32 represents a color: 8 bits of nothing, then 8 bits each of R, G, B
@@ -88,7 +97,7 @@ fn main() {
             },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
                 if !paused {
-                    unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); }
+                    unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); } // @todo commenting this out prevents the crash. Why?
 
                     // print iteration number if needed
                     iter += 1;
@@ -137,10 +146,12 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .src_file("src/shallow_wave.cl")
         .cmplr_def_f32("TIME_STEP", TIME_STEP)
         .cmplr_def_f32("SPACIAL_STEP", SPACIAL_STEP)
-        .cmplr_def("N_GRIDPOINTS", N_GRIDPOINTS as i32);
+        .cmplr_def("N_GRIDPOINTS_PER_DIM", N_GRIDPOINTS_PER_DIM as i32);
     let pro_que = ocl::ProQue::builder()
         .prog_bldr(prog_builder)
         .build().unwrap();
+
+    println!("{}", pro_que.device().name().unwrap()); // @debug
 
     let h_buffer = ocl::Buffer::<f32>::builder()
         .queue(pro_que.queue().clone())
@@ -149,12 +160,12 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
         .build().expect("Failed to build h buffer.");
 
-    let v_buffer = ocl::Buffer::<f32>::builder()
+    let w_buffer = ocl::Buffer::<f32>::builder()
         .queue(pro_que.queue().clone())
         .len(initial_h_values.len())
         .fill_val(0f32) // 0-initialize
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
-        .build().expect("Failed to build v buffer.");
+        .build().expect("Failed to build w buffer.");
 
     let image = ocl::Image::<u32>::builder()
         .queue(pro_que.queue().clone())
@@ -180,7 +191,7 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
     let iteration_kernel = pro_que.kernel_builder("iterate")
         .global_work_size(initial_h_values.len())
         .arg_named("h", h_buffer.clone())
-        .arg_named("v", v_buffer.clone())
+        .arg_named("w", w_buffer.clone())
         .build().expect("Failed to build iteration kernel.");
 
     let render_kernel = pro_que.kernel_builder("render")

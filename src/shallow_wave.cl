@@ -4,12 +4,15 @@ the file, and so that their types are explicit.
 */
 static constant const float DT = TIME_STEP;
 static constant const float DX = SPACIAL_STEP;
-static constant const int   H_SIZE = N_GRIDPOINTS;
+static constant const int   H_SIZE = N_GRIDPOINTS_PER_DIM;
 
 // acceleration due to gravity
 #define G 9.81f
 
-// convert 2d logical index (x, y) in the grid to a 1d index for accessing the value at (x,y) in a buffer
+/*
+Convert 2d logical index (x, y) in the grid to a 1d index for accessing the value at (x,y) in a buffer,
+assuming the buffer data is in row-major order.
+*/
 int gridindex_2d_to_1d(int2 ind) {
     return H_SIZE*ind.y + ind.x;
 }
@@ -180,14 +183,25 @@ kernel void render(write_only image2d_t render_target, global float* h, float ax
 
     float pixel_xcoord_normalized = (float)pixel_xcoord / (float)(width  - 1);
     float pixel_ycoord_normalized = (float)pixel_ycoord / (float)(height - 1);
+    pixel_ycoord_normalized = 1.f - pixel_ycoord_normalized; // because image y-axis is upside-down
 
-    float h_coord_float = pixel_xcoord_normalized * (float)(H_SIZE - 1);
-    float h_val = (h[(int)floor(h_coord_float)] + h[(int)ceil(h_coord_float)]) * 0.5f;
+    float h_xcoord_float = pixel_xcoord_normalized * (float)(H_SIZE - 1);
+    float h_ycoord_float = pixel_ycoord_normalized * (float)(H_SIZE - 1);
+    // The sample point might fall between gridpoints; take the average of the nearest gridpoints.
+    // Note that some or all of these gridpoints may be the same gridpoint, which should be fine.
+    int nearest_xcoord_left  = (int)floor(h_xcoord_float);
+    int nearest_xcoord_right = (int) ceil(h_xcoord_float);
+    int nearest_ycoord_below = (int)floor(h_ycoord_float);
+    int nearest_ycoord_above = (int) ceil(h_ycoord_float);
+    float h_val1 = gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_below));
+    float h_val2 = gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_above));
+    float h_val3 = gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_below));
+    float h_val4 = gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_above));
+    float h_val = (h_val1 + h_val2 + h_val3 + h_val4) * 0.25f;
 
-    float axis_ycoord_normalized = 1.f - pixel_ycoord_normalized; // because image y-axis is upside-down
-    float axis_ycoord = axis_ycoord_normalized * (axis_max - axis_min) + axis_min;
-    float pixel_is_in_fluid = step(axis_ycoord, h_val);
-    float3 color = pixel_is_in_fluid * (float3)(0., 0.5, 1.);
+    h_val = clamp(h_val, axis_min, axis_max);
+    float brightness = (h_val - axis_min) / (axis_max - axis_min); // normalize to [0, 1]
+    float3 color = brightness * (float3)(0., 0.5, 1.);
 
     convert_and_write_image(render_target, (int2)(pixel_xcoord, pixel_ycoord), color);
 }
