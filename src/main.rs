@@ -88,7 +88,7 @@ fn main() {
             },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
                 if !paused {
-                    unsafe { ocl_stuff.iteration_kernel.cmd().enq().unwrap(); }
+                    unsafe { ocl_stuff.iteration_kernel.enq().unwrap(); }
 
                     // print iteration number if needed
                     iter += 1;
