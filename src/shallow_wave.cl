@@ -128,7 +128,7 @@ kernel void iterate(global float* h, global float2* w) {
     float2 w_b = w[ind_b];
     float2 w_t = w[ind_t];
     //
-    // Must additionally multiply gradient computation by 0.5 if using centered difference.
+    // Multiply gradient computation by 0.5 if using centered difference.
     float2 grad_factor = (float2)(
         choose_f(is_lr_boundary, 1.f/DX, 0.5f/DX),
         choose_f(is_bt_boundary, 1.f/DX, 0.5f/DX)
