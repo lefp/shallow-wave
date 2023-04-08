@@ -2,9 +2,9 @@
 We rename them all here so that the IDE doesn't display "undeclared identifier" errors all over the rest of
 the file, and so that their types are explicit.
 */
-static constant const float DT = TIME_STEP;
-static constant const float DX = SPACIAL_STEP;
-static constant const int   H_SIZE = N_GRIDPOINTS_PER_DIM;
+static constant const float  DT = TIME_STEP;
+static constant const float2 SPATIAL_STEP = (float2)(SPATIAL_STEP_X, SPATIAL_STEP_Y);
+static constant const int2   GRID_SIZE = (int2)(N_GRIDPOINTS_X, N_GRIDPOINTS_Y);
 
 static constant const float3 FLUID_COLOR = (float3)(0.0f, 0.5f, 1.0f);
 static constant const float3 BAD_COLOR   = (float3)(1.0f, 0.0f, 0.0f); // use to indicate errors
@@ -17,7 +17,7 @@ Convert 2d logical index (x, y) in the grid to a 1d index for accessing the valu
 assuming the buffer data is in row-major order.
 */
 int gridindex_2d_to_1d(int2 ind) {
-    return H_SIZE*ind.y + ind.x;
+    return GRID_SIZE.x*ind.y + ind.x;
 }
 
 float choose_f(bool condition, float val_if_true, float val_if_false) {
@@ -99,9 +99,9 @@ kernel void iterate(global float* h, global float2* w) {
 
     // l,r,t,b : left, right, top, bottom
     bool is_l_boundary = gid_x == 0;
-    bool is_r_boundary = gid_x == H_SIZE-1;
+    bool is_r_boundary = gid_x == GRID_SIZE.x-1;
     bool is_b_boundary = gid_y == 0;
-    bool is_t_boundary = gid_y == H_SIZE-1; // @todo grid has same x and y dims for now, but maybe should change that
+    bool is_t_boundary = gid_y == GRID_SIZE.y-1;
     //
     bool is_lr_boundary = is_l_boundary || is_r_boundary;
     bool is_bt_boundary = is_b_boundary || is_t_boundary;
@@ -130,8 +130,8 @@ kernel void iterate(global float* h, global float2* w) {
     //
     // Multiply gradient computation by 0.5 if using centered difference.
     float2 grad_factor = (float2)(
-        choose_f(is_lr_boundary, 1.f/DX, 0.5f/DX),
-        choose_f(is_bt_boundary, 1.f/DX, 0.5f/DX)
+        choose_f(is_lr_boundary, 1.f/SPATIAL_STEP.x, 0.5f/SPATIAL_STEP.x),
+        choose_f(is_bt_boundary, 1.f/SPATIAL_STEP.y, 0.5f/SPATIAL_STEP.y)
     );
 
     float2 grad_h = (float2)(h_r   - h_l,   h_t   - h_b  ) * grad_factor;
@@ -190,8 +190,8 @@ kernel void render(write_only image2d_t render_target, global float* h, float ax
     float pixel_ycoord_normalized = (float)pixel_ycoord / (float)(height - 1);
     pixel_ycoord_normalized = 1.f - pixel_ycoord_normalized; // because image y-axis is upside-down
 
-    float h_xcoord_float = pixel_xcoord_normalized * (float)(H_SIZE - 1);
-    float h_ycoord_float = pixel_ycoord_normalized * (float)(H_SIZE - 1);
+    float h_xcoord_float = pixel_xcoord_normalized * (float)(GRID_SIZE.x - 1);
+    float h_ycoord_float = pixel_ycoord_normalized * (float)(GRID_SIZE.y - 1);
     // The sample point might fall between gridpoints; take the average of the nearest gridpoints.
     // Note that some or all of these gridpoints may be the same gridpoint, which should be fine.
     int nearest_xcoord_left  = (int)floor(h_xcoord_float);
@@ -208,6 +208,7 @@ kernel void render(write_only image2d_t render_target, global float* h, float ax
     h_val = clamp(h_val, axis_min, axis_max);
     float brightness = (h_val - axis_min) / (axis_max - axis_min); // normalize to [0, 1]
     float3 color = choose_f3(something_is_wrong, BAD_COLOR, brightness * FLUID_COLOR);
+    // if ((pixel_xcoord == width / 2) || (pixel_ycoord == height / 2)) color = BAD_COLOR;
 
     convert_and_write_image(render_target, (int2)(pixel_xcoord, pixel_ycoord), color);
 }
