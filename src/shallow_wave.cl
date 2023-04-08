@@ -147,7 +147,7 @@ kernel void iterate(global float* h, global float2* w) {
     // = uv grad(h) + h [(u,v) .* (grad(w).y, grad(w).x)]
     // = w.x*w.y*grad(h) + h*w.*flip(grad(w)).
     float2 grad_huv = w_c.x*w_c.y*grad_h + h_c*grad_w.yx;
-    float2 dw_by_dt = -( dh_by_dt*w_c + 2*h_c*w_c*grad_w + G*h_c*grad_h + grad_huv.yx ) / h_c;
+    float2 dw_by_dt = -( dh_by_dt*w_c + 2*h_c*w_c*grad_w + G*h_c*grad_h + grad_huv.yx ) / ((h_c > 0)*h_c + (h_c <= 0)*1.f);
 
     // @todo maybe some fancier time integration method (Runge-Kutta?)
     float  h_new = h_c + dh_by_dt*DT;
@@ -179,7 +179,6 @@ void convert_and_write_image(write_only image2d_t image, int2 coord, float3 colo
 `h_size` is the length of the `h` array.
 Expects `render_target` to be a single-channel `UnsignedInt32` of the form `00000000rrrrrrrrggggggggbbbbbbbb`
 */
-// @continue @2d @todo convert to 2D
 kernel void render(write_only image2d_t render_target, global float* h, float axis_min, float axis_max) {
     int pixel_xcoord = get_global_id(0);
     int pixel_ycoord = get_global_id(1);
