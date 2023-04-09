@@ -45,10 +45,9 @@ use winit::{
 use softbuffer::GraphicsContext;
 
 struct OclStuff {
-    pro_que: ocl::ProQue,
     image: ocl::Image<u32>,
-    iteration_kernel: ocl::Kernel,
-    render_kernel: ocl::Kernel,
+    simulation_kernel: ocl::Kernel,
+    render_kernel:     ocl::Kernel,
 }
 
 fn gaussian2d<F: num::traits::Float>(xcoord: F, ycoord: F, stddev_x: F, stddev_y: F, center_x: F, center_y: F) -> F {
@@ -110,7 +109,7 @@ fn main() {
             },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
                 if !paused {
-                    unsafe { ocl_stuff.iteration_kernel.enq().unwrap(); }
+                    unsafe { ocl_stuff.simulation_kernel.enq().unwrap(); }
 
                     // print iteration number if needed
                     iter += 1;
@@ -126,6 +125,7 @@ fn main() {
             },
             Event::RedrawRequested(..) => {
                 unsafe { ocl_stuff.render_kernel.enq().unwrap(); }
+                // @todo since rendering and reading use different queues, we need to add synchronization logic
                 ocl_stuff.image.read(image_hostbuffer.as_mut_slice()).enq().unwrap();
                 graphics_context.set_buffer(image_hostbuffer.as_ref(), WINDOW_WIDTH as u16, WINDOW_HEIGHT as u16);
                 frame_timer = time::Instant::now();
@@ -161,36 +161,48 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
 
     assert_eq!(initial_h_values.len(), TOTAL_N_GRIDPOINTS);
 
-    let mut prog_builder = ocl::Program::builder();
-    prog_builder
+    // @todo better platform and device selection logic
+    let platform = ocl::Platform::first().unwrap();
+    let device = ocl::Device::first(&platform).unwrap();
+    println!("Chose device '{}'", device.name().unwrap());
+
+    let context = ocl::Context::builder()
+        .devices(&device)
+        .build().unwrap();
+
+    let program = ocl::Program::builder()
         .src_file("src/shallow_wave.cl")
         .cmplr_def_f32("TIME_STEP", TIME_STEP)
         .cmplr_def_f32("SPATIAL_STEP_X", SPATIAL_STEP_X)
         .cmplr_def_f32("SPATIAL_STEP_Y", SPATIAL_STEP_Y)
         .cmplr_def("N_GRIDPOINTS_X", N_GRIDPOINTS_X as i32)
-        .cmplr_def("N_GRIDPOINTS_Y", N_GRIDPOINTS_Y as i32);
-    let pro_que = ocl::ProQue::builder()
-        .prog_bldr(prog_builder)
-        .build().unwrap();
+        .cmplr_def("N_GRIDPOINTS_Y", N_GRIDPOINTS_Y as i32)
+        .build(&context).expect("Failed to build OpenCL program.");
 
-    println!("{}", pro_que.device().name().unwrap()); // @debug
+    /* @todo is there an upper limit on how many commands we can enqueue?
+    Do they just take up more and more memory?
+    Does the enqueueing function block when the queue is full? Would that cause issues like lag?
+    The OpenCL 3.0 spec doesn't seem to say anything about this.
+    */
+    let sim_and_render_queue = ocl::Queue::new(&context, device.clone(), None).unwrap();
+    let data_transfer_queue  = ocl::Queue::new(&context, device.clone(), None).unwrap();
 
     let h_buffer = ocl::Buffer::<f32>::builder()
-        .queue(pro_que.queue().clone())
+        .queue(data_transfer_queue.clone())
         .len(TOTAL_N_GRIDPOINTS)
         .copy_host_slice(initial_h_values)
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
         .build().expect("Failed to build h buffer.");
 
     let w_buffer = ocl::Buffer::<ocl::prm::Float2>::builder()
-        .queue(pro_que.queue().clone())
+        .queue(data_transfer_queue.clone())
         .len(TOTAL_N_GRIDPOINTS)
         .fill_val(ocl::prm::Float2::zero()) // 0-initialize
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
         .build().expect("Failed to build w buffer.");
 
     let image = ocl::Image::<u32>::builder()
-        .queue(pro_que.queue().clone())
+        .queue(data_transfer_queue.clone())
         .image_type(MemObjectType::Image2d)
         // `softbuffer` expects each pixel to be a u32 `0rgb`, where each component is 8 bits.
         // Note that the first component is expected to be 0!
@@ -210,13 +222,19 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         )
         .build().expect("Failed to build OpenCL image.");
 
-    let iteration_kernel = pro_que.kernel_builder("iterate")
+    let simulation_kernel = ocl::Kernel::builder()
+        .program(&program)
+        .name("iterate")
+        .queue(sim_and_render_queue.clone())
         .global_work_size([N_GRIDPOINTS_X, N_GRIDPOINTS_Y])
         .arg_named("h", h_buffer.clone())
         .arg_named("w", w_buffer.clone())
         .build().expect("Failed to build iteration kernel.");
 
-    let render_kernel = pro_que.kernel_builder("render")
+    let render_kernel = ocl::Kernel::builder()
+        .program(&program)
+        .name("render")
+        .queue(sim_and_render_queue.clone())
         .global_work_size((WINDOW_WIDTH, WINDOW_HEIGHT))
         .arg_named("render_target", image.clone())
         .arg_named("h", h_buffer.clone())
@@ -224,6 +242,6 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .arg_named("axis_max", axis_bounds[1])
         .build().expect("Failed to build render kernel.");
 
-    OclStuff { pro_que, image, iteration_kernel, render_kernel }
+    OclStuff { image, simulation_kernel, render_kernel }
 }
 
