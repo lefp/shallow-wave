@@ -5,6 +5,7 @@ const N_GRIDPOINTS_X: usize = 100;
 const N_GRIDPOINTS_Y: usize = 100;
 const TIME_STEP: f32 = 0.00001;
 const RENDER_FPS: f32 = 60.;
+const INITIALLY_PAUSED: bool = true; // whether application wait for an unpause before running simulation
 
 // initial conditions
 const FLUID_DEPTH: f32 = 1.0; // do not set to 0, else expect freaky behavior
@@ -26,7 +27,7 @@ const WINDOW_HEIGHT: usize = ((SPATIAL_DOMAIN_SIZE_Y / SPATIAL_DOMAIN_SIZE_X) * 
 use std::{
     fs::File,
     io::Read,
-    time::{self, Duration},
+    time::{self, Duration}, sync::mpsc::{self, TryRecvError, TrySendError}, thread,
 };
 
 use ocl::{
@@ -67,7 +68,7 @@ fn main() {
     // the graphics context is the abstraction through which images are written to the window, I think
     let mut graphics_context = unsafe { GraphicsContext::new(&window, &window) }.unwrap();
 
-    let ocl_stuff = {
+    let OclStuff { simulation_kernel, render_kernel, image } = {
         let initial_h_values: Vec<f32> = (0..TOTAL_N_GRIDPOINTS).map(|i| {
             let xcoord = (i % N_GRIDPOINTS_X) as f32 * SPATIAL_STEP_X;
             let ycoord = (i / N_GRIDPOINTS_X) as f32 * SPATIAL_STEP_Y;
@@ -87,15 +88,70 @@ fn main() {
     // each u32 represents a color: 8 bits of nothing, then 8 bits each of R, G, B
     let mut image_hostbuffer = vec![0u32; WINDOW_WIDTH * WINDOW_HEIGHT];
 
-    let mut paused = true;
-    let mut iter = 0;
-    let mut iter_display_timer = time::Instant::now();
+    /* @todo do a single render + read + display here; this way, if the program starts paused, we display the
+    initial fluid state instead of a blank screen.
+    */
+
+    // set up communication channels
+    let (pause_toggle_tx, pause_toggle_rx) = mpsc::sync_channel::<()>(0);
+    let (render_request_tx, render_request_rx) = mpsc::sync_channel::<()>(1);
+    /*
+    channel buffer size 1 so that the simulation thread can non-blockingly send back the render status event
+    and continue feeding simulation commands to the hungry GPU
+    */
+    let (render_status_tx, render_status_rx) = mpsc::sync_channel::<ocl::EventList>(1); // @todo probably want EventList here
+
+    // set up simulation thread
+    let sim_and_render_thread = thread::spawn(move || {
+        let mut iter = 0;
+        let mut iter_display_timer = time::Instant::now();
+
+        if INITIALLY_PAUSED { pause_toggle_rx.recv().unwrap(); } // wait for an unpause before starting
+        loop {
+            // check if we were told to pause
+            match pause_toggle_rx.try_recv() {
+                Err(TryRecvError::Disconnected) => { panic!() },
+                Err(TryRecvError::Empty) => {}, // no message, continue as normal
+                Ok(()) => { pause_toggle_rx.recv().unwrap(); }, // pause until we receive another toggle
+            }
+            // check if we were told to render
+            match render_request_rx.try_recv() {
+                Err(TryRecvError::Disconnected) => { panic!() },
+                Err(TryRecvError::Empty) => {}, // no message, continue as normal
+                Ok(()) => {
+                    let mut render_status = ocl::EventList::with_capacity(1); // @todo is repeatedly creating a new EventList inefficient?
+                    unsafe { render_kernel.cmd().enew(&mut render_status).enq().unwrap(); }
+                    match render_status_tx.try_send(render_status) {
+                        Err(TrySendError::Disconnected(_)) => { panic!() },
+                        // we really don't want the receiving to slow down the simulation by blocking us
+                        Err(TrySendError::Full(_)) => { panic!("Blocked while sending render status."); },
+                        Ok(()) => {},
+                    }
+                },
+            }
+
+            // continue running the simulation
+            unsafe { simulation_kernel.enq().unwrap(); }
+
+            // print iteration number if needed
+            iter += 1;
+            if iter_display_timer.elapsed() >= Duration::from_secs(1) {
+                println!("iter: {iter}");
+                iter_display_timer = time::Instant::now();
+            }
+        }
+    });
+
+    let mut paused: bool = INITIALLY_PAUSED;
     let mut frame_timer = time::Instant::now();
     let frame_duration = Duration::from_secs_f32(RENDER_INTERVAL);
     // note: `control_flow` defaults to `ControlFlow::Poll` before the event loop's first iteration
     event_loop.run(move |event, _, control_flow| {
         match event {
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => { control_flow.set_exit(); },
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                // @todo cleanly stop other threads here?
+                control_flow.set_exit();
+            },
             Event::WindowEvent { event: WindowEvent::KeyboardInput { input, .. }, .. } => {
                 if let KeyboardInput {
                     virtual_keycode: Some(VirtualKeyCode::P),
@@ -103,36 +159,33 @@ fn main() {
                     ..
                 } = input {
                     paused = !paused;
+                    pause_toggle_tx.send(()).unwrap();
                     if paused { control_flow.set_wait(); } // don't waste CPU while paused
                     else { control_flow.set_poll(); }
                 };
             },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
                 if !paused {
-                    unsafe { ocl_stuff.simulation_kernel.enq().unwrap(); }
-
-                    // print iteration number if needed
-                    iter += 1;
-                    if iter_display_timer.elapsed() >= Duration::from_secs(1) {
-                        println!("iter: {iter}");
-                        iter_display_timer = time::Instant::now();
-                    }
-
                     // update display if needed. We don't do this on every iteration because it's slow
-                    if frame_timer.elapsed() >= frame_duration { window.request_redraw(); }
+                    if frame_timer.elapsed() >= frame_duration {
+                        window.request_redraw();
+                    }
                     // std::thread::sleep(Duration::from_secs_f32(0.01f32)); // @debug
                 }
             },
             Event::RedrawRequested(..) => {
-                unsafe { ocl_stuff.render_kernel.enq().unwrap(); }
-                // @todo since rendering and reading use different queues, we need to add synchronization logic
-                ocl_stuff.image.read(image_hostbuffer.as_mut_slice()).enq().unwrap();
+                // @todo we should send the previous read event with the request, so that the renderer can wait for it... ew
+                if !paused {
+                    render_request_tx.send(()).unwrap();
+                    let render_completed = render_status_rx.recv().unwrap();
+                    image.read(image_hostbuffer.as_mut_slice()).ewait(&render_completed).enq().unwrap();
+                }
                 graphics_context.set_buffer(image_hostbuffer.as_ref(), WINDOW_WIDTH as u16, WINDOW_HEIGHT as u16);
                 frame_timer = time::Instant::now();
             },
             _ => {},
         }
-    })
+    });
 }
 
 /* A stupid hack for defining float constants in kernels at kernel-compile-time.
