@@ -88,9 +88,12 @@ fn main() {
     // each u32 represents a color: 8 bits of nothing, then 8 bits each of R, G, B
     let mut image_hostbuffer = vec![0u32; WINDOW_WIDTH * WINDOW_HEIGHT];
 
-    /* @todo do a single render + read + display here; this way, if the program starts paused, we display the
-    initial fluid state instead of a blank screen.
-    */
+    // Display the initial state, so that the window isn't blank if the program is paused on startup.
+    unsafe { render_kernel.enq().unwrap(); }
+    image.read(&mut image_hostbuffer)
+        .queue(render_kernel.default_queue().unwrap()) // use same queue, so read waits for render to complete
+        .enq().unwrap();
+    graphics_context.set_buffer(&image_hostbuffer, WINDOW_WIDTH as u16, WINDOW_HEIGHT as u16);
 
     // set up communication channels
     let (pause_toggle_tx, pause_toggle_rx) = mpsc::sync_channel::<()>(0);
