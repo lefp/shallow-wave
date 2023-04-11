@@ -168,23 +168,33 @@ fn main() {
                 };
             },
             Event::MainEventsCleared => { // APPLICATION UPDATE CODE GOES HERE
-                if !paused {
-                    // update display if needed. We don't do this on every iteration because it's slow
-                    if frame_timer.elapsed() >= frame_duration {
-                        window.request_redraw();
-                    }
-                    // std::thread::sleep(Duration::from_secs_f32(0.01f32)); // @debug
-                }
-            },
-            Event::RedrawRequested(..) => {
-                // @todo we should send the previous read event with the request, so that the renderer can wait for it... ew
-                if !paused {
+                /* Update display if needed.
+                We do this at a chosen framerate instead of on every loop iteration, because it's slow.
+                */
+                if !paused && frame_timer.elapsed() >= frame_duration {
+                    /* We do the render+read here instead of in RedrawRequested; this way, external redraw
+                    requests don't affect the render+read rate, WE decide when to do it, giving us better
+                    control over performance.
+                    Plus, why render more often than the chosen framerate? If there's a redraw request between
+                    frames, just show the old frame again. This isn't a high-end videogame, we don't care
+                    about keeping up high-refresh-rate monitors.
+                    */
+                    /* @todo we should send the previous read event in the render request, so that the
+                    renderer can wait for it... but we really don't want the simulator thread to wait on a
+                    read, so we should just not request a re-render if we still have a read in progress. In
+                    fact, this problem never occurs because because the read is blocking, so it's impossible
+                    to send a re-render request until the read is finished. We could still send the read event
+                    with the re-render request in case we accidentally break that invariant, and just have the
+                    sim kernel panic if the read state isn't CL_COMPLETE. */
                     render_request_tx.send(()).unwrap();
                     let render_completed = render_status_rx.recv().unwrap();
                     image.read(image_hostbuffer.as_mut_slice()).ewait(&render_completed).enq().unwrap();
+                    window.request_redraw();
+                    frame_timer = time::Instant::now();
                 }
+            },
+            Event::RedrawRequested(..) => {
                 graphics_context.set_buffer(image_hostbuffer.as_ref(), WINDOW_WIDTH as u16, WINDOW_HEIGHT as u16);
-                frame_timer = time::Instant::now();
             },
             _ => {},
         }
