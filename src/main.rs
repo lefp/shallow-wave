@@ -150,8 +150,13 @@ fn main() {
     let mut paused: bool = INITIALLY_PAUSED;
     let mut frame_timer = time::Instant::now();
     let frame_duration = Duration::from_secs_f32(RENDER_INTERVAL);
-    // note: `control_flow` defaults to `ControlFlow::Poll` before the event loop's first iteration
+    let mut first_run = true;
     event_loop.run(move |event, _, control_flow| {
+        /* Hack to initialize control flow correctly on first loop iteration.
+        Otherwise defaults to ControlFlow::Poll.
+        There's no way to initialize the control flow setting before running the event loop. */
+        if first_run && paused { control_flow.set_wait(); first_run = false; }
+
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 // @todo cleanly stop other threads here?
@@ -175,6 +180,10 @@ fn main() {
                 */
                 if !paused && frame_timer.elapsed() >= frame_duration {
                     frame_timer = time::Instant::now();
+                    /* @todo maybe we should use ControlFlow::WaitUntil(now+frame_duration) to more
+                    efficiently wait till it's time to draw the next frame, since all we're doing here is
+                    busy-waiting for that to happen anyway.
+                    */
                     /* We do the render+read here instead of in RedrawRequested; this way, external redraw
                     requests don't affect the render+read rate, WE decide when to do it, giving us better
                     control over performance.
