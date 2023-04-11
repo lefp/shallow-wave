@@ -127,7 +127,7 @@ fn main() {
                     unsafe { render_kernel.cmd().enew(&mut render_status).enq().unwrap(); }
                     match render_status_tx.try_send(render_status) {
                         Err(TrySendError::Disconnected(_)) => { panic!() },
-                        // we really don't want the receiving to slow down the simulation by blocking us
+                        // we really don't want the receiver to slow down the simulation by blocking us
                         Err(TrySendError::Full(_)) => { panic!("Blocked while sending render status."); },
                         Ok(()) => {},
                     }
