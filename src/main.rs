@@ -102,7 +102,7 @@ fn main() {
     channel buffer size 1 so that the simulation thread can non-blockingly send back the render status event
     and continue feeding simulation commands to the hungry GPU
     */
-    let (render_status_tx, render_status_rx) = mpsc::sync_channel::<ocl::EventList>(1);
+    let (render_status_tx, render_status_rx) = mpsc::sync_channel::<ocl::Event>(1);
 
     // set up simulation thread
     let _sim_and_render_thread = thread::spawn(move || {
@@ -123,7 +123,7 @@ fn main() {
                 Err(TryRecvError::Disconnected) => { panic!() },
                 Err(TryRecvError::Empty) => {}, // no message, continue as normal
                 Ok(()) => {
-                    let mut render_status = ocl::EventList::with_capacity(1); // @todo is repeatedly creating a new EventList inefficient?
+                    let mut render_status = ocl::Event::empty();
                     unsafe { render_kernel.cmd().enew(&mut render_status).enq().unwrap(); }
                     match render_status_tx.try_send(render_status) {
                         Err(TrySendError::Disconnected(_)) => { panic!() },
@@ -190,6 +190,7 @@ fn main() {
                     sim kernel panic if the read state isn't CL_COMPLETE. */
                     render_request_tx.send(()).unwrap();
                     let render_completed = render_status_rx.recv().unwrap();
+                    // @note the argument to `ewait` MUST be a reference; see https://github.com/cogciprocate/ocl/issues/186
                     image.read(image_hostbuffer.as_mut_slice()).ewait(&render_completed).enq().unwrap();
                     window.request_redraw();
                     frame_timer = time::Instant::now();
