@@ -25,9 +25,9 @@ const RENDER_INTERVAL: f32 = 1. / RENDER_FPS;
 const WINDOW_HEIGHT: usize = ((SPATIAL_DOMAIN_SIZE_Y / SPATIAL_DOMAIN_SIZE_X) * WINDOW_WIDTH as f32) as usize;
 
 use std::{
-    fs::File,
-    io::Read,
-    time::{self, Duration}, sync::mpsc::{self, TryRecvError, TrySendError}, thread,
+    time::{self, Duration},
+    sync::mpsc::{self, TryRecvError, TrySendError},
+    thread,
 };
 
 use ocl::{
@@ -102,10 +102,10 @@ fn main() {
     channel buffer size 1 so that the simulation thread can non-blockingly send back the render status event
     and continue feeding simulation commands to the hungry GPU
     */
-    let (render_status_tx, render_status_rx) = mpsc::sync_channel::<ocl::EventList>(1); // @todo probably want EventList here
+    let (render_status_tx, render_status_rx) = mpsc::sync_channel::<ocl::EventList>(1);
 
     // set up simulation thread
-    let sim_and_render_thread = thread::spawn(move || {
+    let _sim_and_render_thread = thread::spawn(move || {
         let mut iter = 0;
         let mut iter_display_timer = time::Instant::now();
 
