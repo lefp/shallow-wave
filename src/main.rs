@@ -107,7 +107,8 @@ fn main() {
     // set up simulation thread
     let _sim_and_render_thread = thread::spawn(move || {
         let mut iter = 0;
-        let mut iter_display_timer = time::Instant::now();
+        let mut last_printed_iter = 0;
+        let mut iter_print_timer = time::Instant::now();
 
         if INITIALLY_PAUSED { pause_toggle_rx.recv().unwrap(); } // wait for an unpause before starting
         loop {
@@ -138,9 +139,10 @@ fn main() {
 
             // print iteration number if needed
             iter += 1;
-            if iter_display_timer.elapsed() >= Duration::from_secs(1) {
-                println!("iter: {iter}");
-                iter_display_timer = time::Instant::now();
+            if iter_print_timer.elapsed() >= Duration::from_secs(1) {
+                println!("iter: {iter:10} | iters per second: {}", iter - last_printed_iter);
+                last_printed_iter = iter;
+                iter_print_timer = time::Instant::now();
             }
         }
     });
