@@ -174,6 +174,7 @@ fn main() {
                 We do this at a chosen framerate instead of on every loop iteration, because it's slow.
                 */
                 if !paused && frame_timer.elapsed() >= frame_duration {
+                    frame_timer = time::Instant::now();
                     /* We do the render+read here instead of in RedrawRequested; this way, external redraw
                     requests don't affect the render+read rate, WE decide when to do it, giving us better
                     control over performance.
@@ -193,7 +194,6 @@ fn main() {
                     // @note the argument to `ewait` MUST be a reference; see https://github.com/cogciprocate/ocl/issues/186
                     image.read(image_hostbuffer.as_mut_slice()).ewait(&render_completed).enq().unwrap();
                     window.request_redraw();
-                    frame_timer = time::Instant::now();
                 }
             },
             Event::RedrawRequested(..) => {
