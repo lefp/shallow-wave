@@ -16,6 +16,7 @@ static constant const float3 BAD_COLOR   = (float3)(1.0f, 0.0f, 0.0f); // use to
 Convert 2d logical index (x, y) in the grid to a 1d index for accessing the value at (x,y) in a buffer,
 assuming the buffer data is in row-major order.
 */
+// @todo should we start using 64-bit ints for linear indices to avoid overflow on large grids?
 int gridindex_2d_to_1d(int2 ind) {
     return GRID_SIZE.x*ind.y + ind.x;
 }
@@ -192,12 +193,16 @@ kernel void render(write_only image2d_t render_target, global float* h, float ax
 
     float h_xcoord_float = pixel_xcoord_normalized * (float)(GRID_SIZE.x - 1);
     float h_ycoord_float = pixel_ycoord_normalized * (float)(GRID_SIZE.y - 1);
-    // The sample point might fall between gridpoints; take the average of the nearest gridpoints.
-    // Note that some or all of these gridpoints may be the same gridpoint, which should be fine.
-    int nearest_xcoord_left  = (int)floor(h_xcoord_float);
-    int nearest_xcoord_right = (int) ceil(h_xcoord_float);
-    int nearest_ycoord_below = (int)floor(h_ycoord_float);
-    int nearest_ycoord_above = (int) ceil(h_ycoord_float);
+
+    /* The sample point might fall between gridpoints; take the average value of the nearest gridpoints.
+    Some or all of these gridpoints could be the same gridpoint, which should be fine.
+    @note We use `min`/`max` here to prevent ouf-of-bounds accesses near boundary points caused by float
+    imprecision. */
+    int nearest_xcoord_left  = max((int)floor(h_xcoord_float), 0);
+    int nearest_xcoord_right = min((int) ceil(h_xcoord_float), GRID_SIZE.x - 1);
+    int nearest_ycoord_below = max((int)floor(h_ycoord_float), 0);
+    int nearest_ycoord_above = min((int) ceil(h_ycoord_float), GRID_SIZE.y - 1);
+
     float h_val1 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_below))];
     float h_val2 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_above))];
     float h_val3 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_below))];
