@@ -12,6 +12,12 @@ static constant const float3 BAD_COLOR   = (float3)(1.0f, 0.0f, 0.0f); // use to
 // acceleration due to gravity
 #define G 9.81f
 
+// manually specify alignment to avoid guessing; I didn't find struct alignment rules in the OpenCL spec
+struct __attribute__((aligned(16))) SimQuantities {
+    float2 w;
+    float h;
+};
+
 /*
 Convert 2d logical index (x, y) in the grid to a 1d index for accessing the value at (x,y) in a buffer,
 assuming the buffer data is in row-major order.
@@ -39,7 +45,7 @@ float mul_if(bool condition, float factor) {
     return condition*factor + (float)(!condition);
 }
 
-kernel void iterate(global float* h, global float2* w) {
+kernel void iterate(global struct SimQuantities* quantities) {
     /*
     Let
         rho = density
@@ -117,18 +123,28 @@ kernel void iterate(global float* h, global float2* w) {
     int ind_b = gridindex_2d_to_1d(choose_i2(is_b_boundary, gid, (int2)(gid.x  , gid.y-1)));
     int ind_t = gridindex_2d_to_1d(choose_i2(is_t_boundary, gid, (int2)(gid.x  , gid.y+1)));
 
-    float  h_c = h[ind_c];
-    float  h_l = h[ind_l];
-    float  h_r = h[ind_r];
-    float  h_b = h[ind_b];
-    float  h_t = h[ind_t];
+    struct SimQuantities quantity;
     //
-    float2 w_c = w[ind_c];
-    float2 w_l = w[ind_l];
-    float2 w_r = w[ind_r];
-    float2 w_b = w[ind_b];
-    float2 w_t = w[ind_t];
+    quantity = quantities[ind_c];
+    float2 w_c = quantity.w;
+    float  h_c = quantity.h;
     //
+    quantity = quantities[ind_l];
+    float2 w_l = quantity.w;
+    float  h_l = quantity.h;
+    //
+    quantity = quantities[ind_r];
+    float2 w_r = quantity.w;
+    float  h_r = quantity.h;
+    //
+    quantity = quantities[ind_b];
+    float2 w_b = quantity.w;
+    float  h_b = quantity.h;
+    //
+    quantity = quantities[ind_t];
+    float2 w_t = quantity.w;
+    float  h_t = quantity.h;
+
     // Multiply gradient computation by 0.5 if using centered difference.
     float2 grad_factor = (float2)(
         choose_f(is_lr_boundary, 1.f/SPATIAL_STEP.x, 0.5f/SPATIAL_STEP.x),
@@ -157,9 +173,11 @@ kernel void iterate(global float* h, global float2* w) {
     w_new.x *= mul_if(is_lr_boundary, -1.f);
     w_new.y *= mul_if(is_bt_boundary, -1.f);
 
+    // reuse struct to write data back to buffer
+    quantity.w = w_new;
+    quantity.h = h_new;
     barrier(CLK_GLOBAL_MEM_FENCE); // make sure all invocations have read from the buffers we're gonna modify
-    h[ind_c] = h_new;
-    w[ind_c] = w_new;
+    quantities[ind_c] = quantity;
 }
 
 // RENDERING CODE --------------------------------------------------------------------------------------------
@@ -180,7 +198,12 @@ void convert_and_write_image(write_only image2d_t image, int2 coord, float3 colo
 `h_size` is the length of the `h` array.
 Expects `render_target` to be a single-channel `UnsignedInt32` of the form `00000000rrrrrrrrggggggggbbbbbbbb`
 */
-kernel void render(write_only image2d_t render_target, global float* h, float axis_min, float axis_max) {
+kernel void render(
+    write_only image2d_t render_target,
+    global struct SimQuantities* quantities,
+    float axis_min,
+    float axis_max
+) {
     int pixel_xcoord = get_global_id(0);
     int pixel_ycoord = get_global_id(1);
 
@@ -203,10 +226,11 @@ kernel void render(write_only image2d_t render_target, global float* h, float ax
     int nearest_ycoord_below = max((int)floor(h_ycoord_float), 0);
     int nearest_ycoord_above = min((int) ceil(h_ycoord_float), GRID_SIZE.y - 1);
 
-    float h_val1 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_below))];
-    float h_val2 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_above))];
-    float h_val3 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_below))];
-    float h_val4 = h[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_above))];
+    // @todo maybe display velocity somehow too
+    float h_val1 = quantities[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_below))].h;
+    float h_val2 = quantities[gridindex_2d_to_1d((int2)(nearest_xcoord_left , nearest_ycoord_above))].h;
+    float h_val3 = quantities[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_below))].h;
+    float h_val4 = quantities[gridindex_2d_to_1d((int2)(nearest_xcoord_right, nearest_ycoord_above))].h;
     float h_val = (h_val1 + h_val2 + h_val3 + h_val4) * 0.25f;
 
     bool something_is_wrong = !isnormal(h_val); // +-zero, +-Inf, NaN, and subnormal values

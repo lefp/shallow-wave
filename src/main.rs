@@ -51,6 +51,16 @@ struct OclStuff {
     render_kernel:     ocl::Kernel,
 }
 
+/// Memory layout must align with the equivalent struct definition in the OpenCL C program.
+// @todo maybe do some kind of compile-time `assert` about the struct's size and alignment?
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct SimQuantities {
+    w: ocl::prm::Float2,
+    h: f32, // @todo should this be ocl::Prm::Float?
+}
+unsafe impl ocl::OclPrm for SimQuantities {} // @note make layout and alignment is correct when using this
+
 fn gaussian2d<F: num::traits::Float>(xcoord: F, ycoord: F, stddev_x: F, stddev_y: F, center_x: F, center_y: F) -> F {
     F::exp( -F::from(0.5).unwrap() * (
         ((xcoord - center_x) / stddev_x).powi(2) +
@@ -59,6 +69,8 @@ fn gaussian2d<F: num::traits::Float>(xcoord: F, ycoord: F, stddev_x: F, stddev_y
 }
 
 fn main() {
+    println!("sz: {}, algn: {}", std::mem::size_of::<SimQuantities>(), std::mem::align_of::<SimQuantities>());
+    // std::process::exit(0);
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_resizable(false)
@@ -69,20 +81,26 @@ fn main() {
     let mut graphics_context = unsafe { GraphicsContext::new(&window, &window) }.unwrap();
 
     let OclStuff { simulation_kernel, render_kernel, image } = {
-        let initial_h_values: Vec<f32> = (0..TOTAL_N_GRIDPOINTS).map(|i| {
+        let initial_values: Vec<SimQuantities> = (0..TOTAL_N_GRIDPOINTS).map(|i| {
             let xcoord = (i % N_GRIDPOINTS_X) as f32 * SPATIAL_STEP_X;
             let ycoord = (i / N_GRIDPOINTS_X) as f32 * SPATIAL_STEP_Y;
-            FLUID_DEPTH +
-            INIT_WAVE_HEIGHT *
-            gaussian2d(
-                xcoord, ycoord,
-                INIT_STDDEV_X, INIT_STDDEV_Y,
-                INIT_WAVE_CENTERPOINT_X, INIT_WAVE_CENTERPOINT_Y
-            )
+            let h =
+                FLUID_DEPTH +
+                INIT_WAVE_HEIGHT *
+                gaussian2d(
+                    xcoord, ycoord,
+                    INIT_STDDEV_X, INIT_STDDEV_Y,
+                    INIT_WAVE_CENTERPOINT_X, INIT_WAVE_CENTERPOINT_Y
+                );
+            SimQuantities { w: ocl::prm::Float2::zero(), h }
         }).collect();
-        let min_initial_h = initial_h_values.iter().copied().reduce(f32::min).unwrap();
-        let max_initial_h = initial_h_values.iter().copied().reduce(f32::max).unwrap();
-        set_up_opencl(&initial_h_values, [min_initial_h - 0.1*(max_initial_h - min_initial_h), max_initial_h])
+
+        let mut min_initial_h = f32::INFINITY;
+        let mut max_initial_h = f32::NEG_INFINITY;
+        initial_values.iter().for_each(|q| min_initial_h = f32::min(q.h, min_initial_h));
+        initial_values.iter().for_each(|q| max_initial_h = f32::max(q.h, max_initial_h));
+
+        set_up_opencl(&initial_values, [min_initial_h - 0.1*(max_initial_h - min_initial_h), max_initial_h])
     };
 
     // each u32 represents a color: 8 bits of nothing, then 8 bits each of R, G, B
@@ -231,13 +249,13 @@ impl<'b> OclCompileTimeF32ConstantHack for ocl::builders::ProgramBuilder<'b> {
     }
 }
 
-fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
+fn set_up_opencl(initial_values: &[SimQuantities], axis_bounds: [f32; 2]) -> OclStuff {
     /* @note: you MUST ensure that the OpenCL and kernel argument types defined here are the same as those
     defined in the OpenCL program/kernel source code.
     @todo mark this function unsafe, as the Rust-to-OpenCL-C interface is not type-safe.
     */
 
-    assert_eq!(initial_h_values.len(), TOTAL_N_GRIDPOINTS);
+    assert_eq!(initial_values.len(), TOTAL_N_GRIDPOINTS);
 
     // @todo better platform and device selection logic
     let platform = ocl::Platform::first().unwrap();
@@ -265,19 +283,12 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
     let sim_and_render_queue = ocl::Queue::new(&context, device.clone(), None).unwrap();
     let data_transfer_queue  = ocl::Queue::new(&context, device.clone(), None).unwrap();
 
-    let h_buffer = ocl::Buffer::<f32>::builder()
+    let sim_quantities_buffer = ocl::Buffer::<SimQuantities>::builder()
         .queue(data_transfer_queue.clone())
         .len(TOTAL_N_GRIDPOINTS)
-        .copy_host_slice(initial_h_values)
+        .copy_host_slice(initial_values)
         .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
-        .build().expect("Failed to build h buffer.");
-
-    let w_buffer = ocl::Buffer::<ocl::prm::Float2>::builder()
-        .queue(data_transfer_queue.clone())
-        .len(TOTAL_N_GRIDPOINTS)
-        .fill_val(ocl::prm::Float2::zero()) // 0-initialize
-        .flags(MemFlags::HOST_NO_ACCESS | MemFlags::READ_WRITE)
-        .build().expect("Failed to build w buffer.");
+        .build().expect("Failed to build sim quantities buffer.");
 
     let image = ocl::Image::<u32>::builder()
         .queue(data_transfer_queue.clone())
@@ -305,8 +316,7 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .name("iterate")
         .queue(sim_and_render_queue.clone())
         .global_work_size([N_GRIDPOINTS_X, N_GRIDPOINTS_Y])
-        .arg_named("h", h_buffer.clone())
-        .arg_named("w", w_buffer.clone())
+        .arg_named("quantities", sim_quantities_buffer.clone())
         .build().expect("Failed to build iteration kernel.");
 
     let render_kernel = ocl::Kernel::builder()
@@ -315,7 +325,7 @@ fn set_up_opencl(initial_h_values: &[f32], axis_bounds: [f32; 2]) -> OclStuff {
         .queue(sim_and_render_queue.clone())
         .global_work_size((WINDOW_WIDTH, WINDOW_HEIGHT))
         .arg_named("render_target", image.clone())
-        .arg_named("h", h_buffer.clone())
+        .arg_named("quantities", sim_quantities_buffer.clone())
         .arg_named("axis_min", axis_bounds[0])
         .arg_named("axis_max", axis_bounds[1])
         .build().expect("Failed to build render kernel.");
