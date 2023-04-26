@@ -3,7 +3,7 @@ Shallow water simulation using Rust+OpenCL.
 
 Rendering is also done using OpenCL, an idea taken from [FluidX3D](https://github.com/ProjectPhysX/FluidX3D) that really simplifies the graphics code.
 
-The main goal is to develop skills toward GPU cluster computing, and (with lower priority) numerical methods. I'm also hoping to prove to myself that there is a decent alternative to Fortran/C/C++ for HPC.
+The main goal is to develop skills toward GPU cluster computing, and (with lower priority) numerical methods. I'm also hoping to prove to myself that there is a decent alternative to Fortran/C/C++ for HPC. To that end, I also wrote a [Zig version](https://github.com/lefp/shallow-wave-zig-opencl).
 
 Next steps:
 * Multi-GPU support
